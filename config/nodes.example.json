@@ -1,0 +1,43 @@
+{
+  "nodes": [
+    {
+      "id": "wgfrankfurt",
+      "name": "Frankfurt-1",
+      "country": "Germany",
+      "city": "Frankfurt",
+      "host": "wg-fra1.example.com",
+      "port": 51820,
+      "kind": "WireGuard",
+      "privateKey": "ЗАМЕНИТЕ_НА_ПРИВАТНЫЙ_КЛЮЧ_КЛИЕНТА=",
+      "publicKey": "ЗАМЕНИТЕ_НА_ПУБЛИЧНЫЙ_КЛЮЧ_СЕРВЕРА=",
+      "presharedKey": "",
+      "address": "10.13.0.2/32",
+      "dns": "1.1.1.1,1.0.0.1",
+      "mtu": 1420,
+      "persistentKeepalive": 25,
+      "allowedIps": [ "0.0.0.0/0" ],
+      "tags": [ "own", "eu" ],
+      "enabled": true,
+      "priority": 0,
+      "source": "свой VPS"
+    },
+    {
+      "id": "wgpraha",
+      "name": "Praha-1",
+      "country": "Czechia",
+      "city": "Prague",
+      "host": "10.20.0.1",
+      "port": 51820,
+      "kind": "WireGuard",
+      "privateKey": "ЗАМЕНИТЕ_НА_ПРИВАТНЫЙ_КЛЮЧ_КЛИЕНТА=",
+      "publicKey": "ЗАМЕНИТЕ_НА_ПУБЛИЧНЫЙ_КЛЮЧ_СЕРВЕРА=",
+      "address": "10.20.0.2/32",
+      "mtu": 1420,
+      "persistentKeepalive": 25,
+      "allowedIps": [ "0.0.0.0/0" ],
+      "tags": [ "own", "eu" ],
+      "enabled": true,
+      "source": "свой VPS"
+    }
+  ]
+}
