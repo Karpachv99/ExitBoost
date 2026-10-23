@@ -1,0 +1,84 @@
+name: Release
+
+# Релиз собирается при пуше тега v* (например: git tag v1.1.0 && git push --tags)
+# или вручную из вкладки Actions (кнопка Run workflow).
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Версия без буквы v, например 1.1.0'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Тесты
+        run: dotnet test --nologo
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw 'Не удалось установить Inno Setup' }
+
+      - name: Сборка и упаковка
+        shell: pwsh
+        run: |
+          $version = if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            '${{ inputs.version }}'
+          } else {
+            '${{ github.ref_name }}'.TrimStart('v')
+          }
+          Write-Host "Версия: $version"
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+
+          dotnet publish src/ExitBoost.App -c Release -r win-x64 --self-contained true `
+            -p:Version=$version -o dist/ExitBoost --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Сборка приложения не удалась' }
+
+          dotnet publish tools/ExitBoost.Cli -c Release -r win-x64 --self-contained true `
+            -p:Version=$version -o dist/ExitBoost.Cli --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Сборка CLI не удалась' }
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            "$pwd/dist/ExitBoost", "$pwd/dist/ExitBoost-$version-win-x64.zip",
+            [System.IO.Compression.CompressionLevel]::Optimal, $false)
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            "$pwd/dist/ExitBoost.Cli", "$pwd/dist/ExitBoost.Cli-$version-win-x64.zip",
+            [System.IO.Compression.CompressionLevel]::Optimal, $false)
+
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) { throw 'ISCC.exe не найден' }
+          & $iscc "/DAppVersion=$version" "/DSourceDir=$pwd/dist/ExitBoost" "/O$pwd/dist" 'installer/ExitBoost.iss'
+          if ($LASTEXITCODE -ne 0) { throw 'Сборка установщика не удалась' }
+          if (-not (Test-Path "$pwd/dist/ExitBoost-$version-setup.exe")) { throw 'Установщик не создан' }
+
+      - name: Публикация релиза
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            '${{ inputs.version }}'
+          } else {
+            '${{ github.ref_name }}'.TrimStart('v')
+          }
+          gh release create "v$version" `
+            "dist/ExitBoost-$version-setup.exe" `
+            "dist/ExitBoost-$version-win-x64.zip" `
+            "dist/ExitBoost.Cli-$version-win-x64.zip" `
+            --title "ExitBoost $version" `
+            --generate-notes
