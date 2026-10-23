@@ -87,7 +87,9 @@ public sealed class MainViewModel : ObservableObject
         VpnRemoveKeyCommand = new RelayCommand(_ => { RemoveVpnKey(); return Task.CompletedTask; }, _ => SelectedVpnKey is not null);
         VpnPickTargetsCommand = new RelayCommand(() => PickVpnTargets());
          VpnConnectCommand = new RelayCommand(_ => VpnConnectAsync(), _ => IsVpnRunning is false && SelectedVpnKey is not null);
-         VpnAndDpiConnectCommand = new RelayCommand(_ => ConnectVpnAndDpiAsync(), _ => !IsBusy && SelectedVpnKey is not null);
+         RemoveDpiTargetCommand = new RelayCommand(p => { RemoveDpiTarget(p); return Task.CompletedTask; });
+         RemoveVpnSiteCommand = new RelayCommand(p => { RemoveVpnSite(p); return Task.CompletedTask; });
+         RemoveVpnProgramCommand = new RelayCommand(p => { RemoveVpnProgram(p); return Task.CompletedTask; });
          VpnDisconnectCommand = new RelayCommand(_ => VpnDisconnectAsync(), _ => IsVpnRunning);
         QuickConnectCommand = new RelayCommand(_ => QuickConnectAsync(), _ => !IsBusy);
         VpnInstallCoreCommand = new RelayCommand(_ => VpnInstallCoreAsync(), _ => App.Vpn.IsRunning is false && App.Vpn.IsCoreRunning is false);
@@ -109,6 +111,9 @@ public sealed class MainViewModel : ObservableObject
         VpnTargetsView = CollectionViewSource.GetDefaultView(VpnTargets);
         VpnTargetsView.Filter = o => MatchesVpnTarget(o as VpnTargetPickItem);
         VpnTargetsView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(VpnTargetPickItem.Group)));
+        DpiTargetsView = new ListCollectionView(VpnTargets);
+        DpiTargetsView.Filter = o => MatchesDpiTarget(o as VpnTargetPickItem);
+        DpiTargetsView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(VpnTargetPickItem.Group)));
         BuildVpnTargets();
         VpnKeysView = CollectionViewSource.GetDefaultView(VpnKeyRows);
         VpnKeysView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(VpnKeyItemViewModel.Group)));
@@ -158,11 +163,13 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand DpiPickTargetsCommand { get; }
     public RelayCommand DpiCheckCommand { get; }
     public RelayCommand DpiForceStopCommand { get; }
+    public RelayCommand RemoveDpiTargetCommand { get; }
     public RelayCommand VpnAddKeyCommand { get; }
     public RelayCommand VpnRemoveKeyCommand { get; }
     public RelayCommand VpnPickTargetsCommand { get; }
     public RelayCommand VpnConnectCommand { get; }
-    public RelayCommand VpnAndDpiConnectCommand { get; }
+    public RelayCommand RemoveVpnSiteCommand { get; }
+    public RelayCommand RemoveVpnProgramCommand { get; }
     public RelayCommand VpnDisconnectCommand { get; }
 
     /// <summary>Двойной клик по строке локации: VPN + обход DPI.</summary>
@@ -371,7 +378,18 @@ public sealed class MainViewModel : ObservableObject
         {
             if (!Set(ref _dpiTargetHosts, value)) return;
             _settings.Update(s => s.DpiTargetHosts = value);
+            OnPropertyChanged(nameof(DpiSelectedTargets));
         }
+    }
+
+    public IEnumerable<string> DpiSelectedTargets => DpiTargetHosts
+        .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private void RemoveDpiTarget(object? parameter)
+    {
+        if (parameter is not string target) return;
+        DpiTargetHosts = string.Join(", ", DpiSelectedTargets
+            .Where(x => !x.Equals(target, StringComparison.OrdinalIgnoreCase)));
     }
 
     private string _dpiProgramSearch = "";
@@ -1319,7 +1337,6 @@ public sealed class MainViewModel : ObservableObject
             if (!Set(ref _selectedVpnKey, value)) return;
             RefreshHeaderKeyText();
             VpnConnectCommand.RaiseCanExecuteChanged();
-            VpnAndDpiConnectCommand.RaiseCanExecuteChanged();
             VpnRemoveKeyCommand.RaiseCanExecuteChanged();
         }
     }
@@ -1421,7 +1438,12 @@ public sealed class MainViewModel : ObservableObject
     public string VpnDomainsText
     {
         get => _vpnDomainsText;
-        set { if (Set(ref _vpnDomainsText, value)) SaveVpnRouting(); }
+        set
+        {
+            if (!Set(ref _vpnDomainsText, value)) return;
+            SaveVpnRouting();
+            OnPropertyChanged(nameof(VpnSelectedSites));
+        }
     }
 
     private string _vpnProcsText = "";
@@ -1435,12 +1457,30 @@ public sealed class MainViewModel : ObservableObject
                 SaveVpnRouting();
                 OnPropertyChanged(nameof(VpnProgramsSummary));
                 OnPropertyChanged(nameof(VpnSelectedPrograms));
+                OnPropertyChanged(nameof(VpnSelectedSites));
             }
         }
     }
 
     public IEnumerable<string> VpnSelectedPrograms => VpnProcsText
         .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    public IEnumerable<string> VpnSelectedSites => VpnDomainsText
+        .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private void RemoveVpnSite(object? parameter)
+    {
+        if (parameter is not string site) return;
+        VpnDomainsText = string.Join(", ", VpnSelectedSites
+            .Where(x => !x.Equals(site, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private void RemoveVpnProgram(object? parameter)
+    {
+        if (parameter is not string program) return;
+        VpnProcsText = string.Join(", ", VpnSelectedPrograms
+            .Where(x => !x.Equals(program, StringComparison.OrdinalIgnoreCase)));
+    }
 
     /// <summary>Поиск по списку «программы и сайты» — прямо в выпадающем списке.</summary>
     private string _vpnTargetSearch = "";
@@ -1455,9 +1495,39 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>Программы и сайты, подходящие под поиск (для выпадающего списка).</summary>
     public ICollectionView VpnTargetsView { get; }
+    public ICollectionView DpiTargetsView { get; }
 
     /// <summary>Всё, что можно добавить: запущенные программы + популярные сайты.</summary>
     public ObservableCollection<VpnTargetPickItem> VpnTargets { get; } = new();
+
+    private string _dpiTargetSearch = "";
+    public string DpiTargetSearch
+    {
+        get => _dpiTargetSearch;
+        set
+        {
+            if (Set(ref _dpiTargetSearch, value)) DpiTargetsView.Refresh();
+        }
+    }
+
+    private VpnTargetPickItem? _selectedDpiTarget;
+    public VpnTargetPickItem? SelectedDpiTarget
+    {
+        get => _selectedDpiTarget;
+        set
+        {
+            if (!Set(ref _selectedDpiTarget, value) || value is null) return;
+
+            IEnumerable<string> domains = value.IsSite
+                ? [value.Value]
+                : PickerViewModel.DomainsForProcess(value.Value);
+            AddDpiDomains(domains);
+
+            _selectedDpiTarget = null;
+            OnPropertyChanged(nameof(SelectedDpiTarget));
+            DpiTargetSearch = "";
+        }
+    }
 
     private VpnTargetPickItem? _selectedVpnTarget;
     /// <summary>Выбранный пункт: программа идёт в «программы через VPN», сайт — в «сайты через VPN».</summary>
@@ -1526,6 +1596,25 @@ public sealed class MainViewModel : ObservableObject
         if (filter.Length == 0) return true;
         return item.Title.Contains(filter, StringComparison.OrdinalIgnoreCase)
             || item.Subtitle.Contains(filter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool MatchesDpiTarget(VpnTargetPickItem? item)
+    {
+        if (item is null) return false;
+        string filter = _dpiTargetSearch.Trim();
+        if (filter.Length == 0) return true;
+        return item.Title.Contains(filter, StringComparison.OrdinalIgnoreCase)
+            || item.Subtitle.Contains(filter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void AddDpiDomains(IEnumerable<string> domains)
+    {
+        var existing = DpiTargetHosts
+            .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        foreach (string domain in domains.Where(d => !string.IsNullOrWhiteSpace(d)))
+            if (!existing.Contains(domain, StringComparer.OrdinalIgnoreCase)) existing.Add(domain);
+        DpiTargetHosts = string.Join(", ", existing);
     }
 
     private void AddVpnSite(string domain)
@@ -1658,10 +1747,7 @@ public sealed class MainViewModel : ObservableObject
         await ConnectVpnCoreAsync(key).ConfigureAwait(true);
     }
 
-    /// <summary>
-    /// Двойной клик по локации: переключение на этот ключ и запуск обхода DPI
-    /// (если в каталоге выбрана стратегия и обход ещё не работает).
-    /// </summary>
+    /// <summary>Двойной клик по локации: подключение только выбранного VPN-ключа.</summary>
     private async Task QuickConnectAsync()
     {
         if (IsBusy) return;
@@ -1679,26 +1765,6 @@ public sealed class MainViewModel : ObservableObject
         if (!IsVpnRunning)
             await VpnConnectAsync().ConfigureAwait(true);
         if (!IsVpnRunning) return;
-
-        if (SelectedDpiStrategy is not null && !App.ZapretRunner.IsRunning)
-            await ApplyDpiStrategyAsync().ConfigureAwait(true);
-    }
-
-    /// <summary>
-    /// Запускает оба независимых слоя: VPN для списка VPN-доменов/процессов
-    /// и zapret для отдельного списка доменов обхода DPI.
-    /// </summary>
-    private async Task ConnectVpnAndDpiAsync()
-    {
-        if (SelectedVpnKey is null) return;
-
-        await VpnConnectAsync().ConfigureAwait(true);
-
-        // Ошибка VPN не мешает запустить обход DPI: это независимые компоненты.
-        if (SelectedDpiStrategy is not null)
-            await ApplyDpiStrategyAsync().ConfigureAwait(true);
-        else
-            DpiProgressText = "Выберите стратегию DPI и нажмите «Применить»";
     }
 
     /// <summary>Подключение ядра VPN по ключу (без диалогов — для общей кнопки «Подключить»).</summary>

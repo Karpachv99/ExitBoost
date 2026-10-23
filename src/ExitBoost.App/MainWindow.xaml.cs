@@ -54,6 +54,12 @@ public partial class MainWindow : Window
             vm.VpnTargetSearch = "";
     }
 
+    private void DpiTargetsCombo_DropDownClosed(object? sender, EventArgs e)
+    {
+        if (sender is ComboBox combo && combo.DataContext is MainViewModel vm)
+            vm.DpiTargetSearch = "";
+    }
+
     private void OnProcessSplitClick(object sender, RoutedEventArgs e) => _viewModel.Mode = RoutingMode.ProcessSplit;
 
     private void OnNetworkSplitClick(object sender, RoutedEventArgs e) => _viewModel.Mode = RoutingMode.NetworkSplit;
