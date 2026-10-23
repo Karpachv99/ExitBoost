@@ -1,0 +1,215 @@
+using System.Text.Json;
+
+namespace ExitBoost.Core.Vpn;
+
+/// <summary>Правила маршрутизации VPN-ключа (режим «только выбранные» или «весь трафик»).</summary>
+public sealed class VpnRoutingConfig
+{
+    /// <summary>split — через VPN только выбранные сайты/программы; full — весь трафик.</summary>
+    public string Mode { get; set; } = "split";
+
+    /// <summary>Домены, уходящие через VPN в режиме split (+ все их поддомены).</summary>
+    public List<string> Domains { get; set; } = [];
+
+    /// <summary>Имена процессов (.exe), чей трафик уходит через VPN в режиме split.</summary>
+    public List<string> Processes { get; set; } = [];
+
+    public VpnRoutingConfig Clone() => new()
+    {
+        Mode = Mode,
+        Domains = [.. Domains],
+        Processes = [.. Processes]
+    };
+
+    public void Normalize()
+    {
+        Mode = Mode == "full" ? "full" : "split";
+        Domains = Domains
+            .SelectMany(d => d.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Where(d => d.Length > 0)
+            .Select(d => d.Trim('.').ToLowerInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        Processes = Processes
+            .SelectMany(p => p.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Where(p => p.Length > 0)
+            .Select(p => p.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? p : p + ".exe")
+            .Select(p => p.ToLowerInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+}
+
+/// <summary>
+/// Сохранённые VPN-ключи и настройка маршрутизации: %APPDATA%\ExitBoost\vpn\keys.json.
+/// </summary>
+public sealed class VpnKeyStore
+{
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+
+    public string StoragePath { get; }
+
+    public List<VpnKey> Keys { get; } = [];
+
+    public VpnRoutingConfig Routing { get; } = new();
+
+    public VpnKeyStore()
+    {
+        StoragePath = Path.Combine(AppPaths.DataDirectory, "vpn", "keys.json");
+        Load();
+    }
+
+    public void Load()
+    {
+        try
+        {
+            if (!File.Exists(StoragePath)) return;
+            using var doc = JsonDocument.Parse(File.ReadAllText(StoragePath));
+            if (!doc.RootElement.TryGetProperty("keys", out var keysEl)) return;
+
+            Keys.Clear();
+            foreach (var el in keysEl.EnumerateArray())
+            {
+                var key = DeserializeKey(el);
+                if (key is not null) Keys.Add(key);
+            }
+
+            if (doc.RootElement.TryGetProperty("routing", out var routingEl))
+            {
+                Routing.Mode = routingEl.TryGetProperty("mode", out var m) ? m.GetString() ?? "split" : "split";
+                Routing.Domains = GetStringList(routingEl, "domains");
+                Routing.Processes = GetStringList(routingEl, "processes");
+            }
+            Routing.Normalize();
+        }
+        catch
+        {
+            // повреждённый файл не должен мешать работе — начнём с пустого списка
+        }
+    }
+
+    public void Save()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(StoragePath)!);
+            using var writer = new Utf8JsonWriter(File.Create(StoragePath), new JsonWriterOptions { Indented = true });
+            writer.WriteStartObject();
+            writer.WritePropertyName("keys");
+            writer.WriteStartArray();
+            foreach (var key in Keys) SerializeKey(writer, key);
+            writer.WriteEndArray();
+            writer.WritePropertyName("routing");
+            writer.WriteStartObject();
+            writer.WriteString("mode", Routing.Mode);
+            writer.WritePropertyName("domains");
+            writer.WriteStartArray();
+            foreach (var d in Routing.Domains) writer.WriteStringValue(d);
+            writer.WriteEndArray();
+            writer.WritePropertyName("processes");
+            writer.WriteStartArray();
+            foreach (var p in Routing.Processes) writer.WriteStringValue(p);
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+        catch
+        {
+        }
+    }
+
+    // ---- JSON ключа ----
+
+    private static void SerializeKey(Utf8JsonWriter w, VpnKey key)
+    {
+        w.WriteStartObject();
+        void S(string name, string value) { if (value.Length > 0) w.WriteString(name, value); }
+        S("id", key.Id);
+        S("name", key.Name);
+        S("subscription", key.SubscriptionName);
+        w.WriteString("protocol", key.Protocol.ToString().ToLowerInvariant());
+        S("address", key.Address);
+        w.WriteNumber("port", key.Port);
+        S("id_user", key.UserId);
+        S("security", key.Security);
+        S("transport", key.Transport);
+        S("flow", key.Flow);
+        S("sni", key.Sni);
+        S("fp", key.Fingerprint);
+        S("pbk", key.PublicKey);
+        S("sid", key.ShortId);
+        S("path", key.Path);
+        S("host", key.HostHeader);
+        S("method", key.Method);
+        if (key.AlterId != 0) w.WriteNumber("aid", key.AlterId);
+        S("encrypt", key.Encryption);
+        S("alpn", key.Alpn);
+        S("obfs", key.ObfsType);
+        S("obfs_pass", key.ObfsPassword);
+        S("raw", key.RawLink);
+        w.WriteString("addedAt", key.AddedAt);
+        w.WriteEndObject();
+    }
+
+    private static VpnKey? DeserializeKey(JsonElement el)
+    {
+        string Get(string name)
+        {
+            if (el.TryGetProperty(name, out var v))
+            {
+                if (v.ValueKind == JsonValueKind.Number)
+                    return v.GetRawText();
+                if (v.ValueKind != JsonValueKind.Null)
+                    return v.GetString() ?? "";
+            }
+            return "";
+        }
+
+        if (!VpnProtocolParser.TryParse(Get("protocol"), out var proto)) return null;
+        string address = Get("address");
+        if (address.Length == 0) return null;
+        int port = el.TryGetProperty("port", out var p) && p.TryGetInt32(out var pv) ? pv : 443;
+
+        return new VpnKey
+        {
+            Id = Get("id").Length == 0 ? Guid.NewGuid().ToString("N")[..8] : Get("id"),
+            Name = Get("name").Length == 0 ? address : Get("name"),
+            SubscriptionName = Get("subscription"),
+            Protocol = proto,
+            Address = address,
+            Port = port,
+            UserId = Get("id_user"),
+            Security = Get("security").Length == 0 ? "none" : Get("security"),
+            Transport = Get("transport").Length == 0 ? "tcp" : Get("transport"),
+            Flow = Get("flow"),
+            Sni = Get("sni"),
+            Fingerprint = Get("fp"),
+            PublicKey = Get("pbk"),
+            ShortId = Get("sid"),
+            Path = Get("path"),
+            HostHeader = Get("host"),
+            Method = Get("method"),
+            AlterId = int.TryParse(Get("aid"), out var aid) ? aid : 0,
+            Encryption = Get("encrypt"),
+            Alpn = Get("alpn"),
+            ObfsType = Get("obfs"),
+            ObfsPassword = Get("obfs_pass"),
+            RawLink = Get("raw"),
+            AddedAt = el.TryGetProperty("addedAt", out var at) && at.ValueKind == JsonValueKind.String
+                ? DateTime.TryParse(at.GetString(), out var dt) ? dt : DateTime.UtcNow
+                : DateTime.UtcNow
+        };
+    }
+
+    private static List<string> GetStringList(JsonElement el, string name)
+    {
+        if (!el.TryGetProperty(name, out var a) || a.ValueKind != JsonValueKind.Array)
+            return [];
+        return a.EnumerateArray()
+            .Where(v => v.ValueKind == JsonValueKind.String)
+            .Select(v => v.GetString() ?? "")
+            .Where(s => s.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+}
