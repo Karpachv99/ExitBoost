@@ -5,7 +5,7 @@ using System.Net.Http.Headers;
 namespace ExitBoost.Core.Updates;
 
 /// <summary>
-/// Загрузка и установка обновления: скачиваем zip-архив релиза с GitHub
+/// Загрузка и установка обновления: скачиваем zip-архив из ссылки релиза
 /// и распаковываем поверх текущей папки программы.
 /// </summary>
 public static class UpdateInstaller
@@ -16,7 +16,7 @@ public static class UpdateInstaller
 
     /// <summary>
     /// Скачать файл с прогрессом (0..1). Возвращает путь к скачанному файлу.
-    /// Большие файлы качаются несколькими потоками по диапазонам — с GitHub
+    /// Большие файлы качаются несколькими потоками по диапазонам — с CDN
     /// одно соединение часто отдаёт всего десятки килобайт в секунду.
     /// </summary>
     public static async Task<string> DownloadAsync(
@@ -48,7 +48,7 @@ public static class UpdateInstaller
                 .ConfigureAwait(false);
             if (resp.IsSuccessStatusCode)
             {
-                // GitHub CDN иногда возвращает 206 с Content-Length только
+                // CDN иногда возвращает 206 с Content-Length только
                 // для фактически отданного фрагмента. Используем диапазоны
                 // только если сервер сообщил полный размер в Content-Range.
                 long? fullLength = resp.Content.Headers.ContentRange?.Length;
@@ -76,7 +76,7 @@ public static class UpdateInstaller
             catch (IOException) when (total >= ParallelThreshold && !ct.IsCancellationRequested)
             {
                 // Некоторые прокси обрывают обычный ответ примерно на 24 МБ,
-                // хотя GitHub сообщает полный Content-Length. В этом случае
+                // хотя источник сообщает полный Content-Length. В этом случае
                 // повторяем загрузку диапазонами.
             }
         }

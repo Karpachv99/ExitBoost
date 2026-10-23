@@ -20,7 +20,7 @@ public sealed record UpdateInfo(
 }
 
 /// <summary>
-/// Проверка обновлений через GitHub Releases API.
+/// Проверка обновлений через GitLab Releases API.
 /// Пользователь задаёт репозиторий в формате «владелец/имя» в настройках.
 /// </summary>
 public static class UpdateChecker
@@ -36,7 +36,7 @@ public static class UpdateChecker
         });
         http.Timeout = TimeSpan.FromSeconds(20);
         http.DefaultRequestHeaders.UserAgent.ParseAdd("ExitBoost/1.0");
-        http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
         http.DefaultRequestHeaders.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue
         {
             NoCache = true,
@@ -59,6 +59,8 @@ public static class UpdateChecker
             value = value["http://".Length..];
         if (value.StartsWith("github.com/", StringComparison.OrdinalIgnoreCase))
             value = value["github.com/".Length..];
+        if (value.StartsWith("gitlab.com/", StringComparison.OrdinalIgnoreCase))
+            value = value["gitlab.com/".Length..];
 
         var parts = value.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length < 2) return false;
@@ -77,9 +79,10 @@ public static class UpdateChecker
         string currentVersion,
         CancellationToken ct = default)
     {
-        // Не позволяем прокси/кэшу вернуть предыдущий ответ releases/latest.
+        // Используем официальный GitLab API; cache-bust обходит устаревшие ответы прокси.
+        string projectPath = Uri.EscapeDataString($"{owner}/{repo}");
         string cacheBust = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
-        string url = $"https://api.github.com/repos/{owner}/{repo}/releases/latest?exitboost={cacheBust}";
+        string url = $"https://gitlab.com/api/v4/projects/{projectPath}/releases/permalink/latest?exitboost={cacheBust}";
         using var resp = await Http.GetAsync(url, ct).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode) return null;
 
@@ -96,23 +99,38 @@ public static class UpdateChecker
         if (root.TryGetProperty("body", out var bodyEl) && bodyEl.ValueKind == JsonValueKind.String)
             notes = bodyEl.GetString() ?? "";
 
-        string pageUrl = root.TryGetProperty("html_url", out var urlEl) ? urlEl.GetString() ?? "" : "";
+        string pageUrl = $"https://gitlab.com/{owner}/{repo}/-/releases/{Uri.EscapeDataString(tag)}";
 
         string assetName = "", assetUrl = "";
         long assetSize = 0;
-        if (root.TryGetProperty("assets", out var assetsEl) && assetsEl.ValueKind == JsonValueKind.Array)
+        if (root.TryGetProperty("assets", out var assetsEl)
+            && assetsEl.TryGetProperty("links", out var linksEl)
+            && linksEl.ValueKind == JsonValueKind.Array)
         {
-            foreach (var asset in assetsEl.EnumerateArray())
+            foreach (var asset in linksEl.EnumerateArray())
             {
                 string name = asset.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
-                if (!name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) continue;
+                assetUrl = asset.TryGetProperty("url", out var u) ? u.GetString() ?? "" : "";
+                string fileName;
+                try { fileName = Path.GetFileName(new Uri(assetUrl).AbsolutePath); }
+                catch { continue; }
+                if (!fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) continue;
                 // CLI-архив тоже zip — для обновления нужен именно архив программы.
-                if (name.Contains("cli", StringComparison.OrdinalIgnoreCase)) continue;
-                assetName = name;
-                assetUrl = asset.TryGetProperty("browser_download_url", out var u) ? u.GetString() ?? "" : "";
-                assetSize = asset.TryGetProperty("size", out var s) && s.TryGetInt64(out long size) ? size : 0;
+                if (name.Contains("cli", StringComparison.OrdinalIgnoreCase)
+                    || fileName.Contains("cli", StringComparison.OrdinalIgnoreCase)) continue;
+                assetName = fileName;
                 break;
             }
+        }
+
+        // GitLab release links do not expose file size. A release note may embed
+        // the expected ZIP size so interrupted downloads are detected exactly.
+        if (root.TryGetProperty("description", out var descriptionEl)
+            && descriptionEl.ValueKind == JsonValueKind.String)
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(
+                descriptionEl.GetString() ?? "", "exitboost-asset-size=(\\d+)");
+            if (match.Success) long.TryParse(match.Groups[1].Value, out assetSize);
         }
 
         if (assetUrl.Length == 0) return null;
