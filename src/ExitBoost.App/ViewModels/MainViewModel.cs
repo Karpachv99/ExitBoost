@@ -1591,7 +1591,9 @@ public sealed class MainViewModel : ObservableObject
 
     private bool MatchesVpnTarget(VpnTargetPickItem? item)
     {
-        if (item is null) return false;
+        // В списке выбора VPN показываем только приложения. Сайты вводятся
+        // вручную в поле «Сайты через VPN».
+        if (item is null || item.IsSite) return false;
         string filter = _vpnTargetSearch.Trim();
         if (filter.Length == 0) return true;
         return item.Title.Contains(filter, StringComparison.OrdinalIgnoreCase)
