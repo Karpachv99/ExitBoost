@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using System.IO.Compression;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Security.Authentication;
 using System.Text.Json;
 using ExitBoost.Core.Routing;
 
@@ -33,7 +36,14 @@ public sealed class SingBoxRunner
 
     private static HttpClient CreateHttp()
     {
-        var http = new HttpClient();
+        var handler = new SocketsHttpHandler
+        {
+            AutomaticDecompression = DecompressionMethods.None,
+            ConnectTimeout = TimeSpan.FromSeconds(20),
+            PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+            SslOptions = { EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13 }
+        };
+        var http = new HttpClient(handler);
         http.Timeout = TimeSpan.FromSeconds(40);
         http.DefaultRequestHeaders.UserAgent.ParseAdd("ExitBoost/1.0");
         return http;
@@ -78,7 +88,7 @@ public sealed class SingBoxRunner
             if (tag.Length == 0) throw new InvalidOperationException("не найден актуальный релиз sing-box");
 
             Log?.Invoke($"скачивание sing-box {tag} ({url[(url.LastIndexOf('/') + 1)..]})…");
-            byte[] data = await Http.GetByteArrayAsync(url, ct).ConfigureAwait(false);
+            byte[] data = await DownloadArchiveAsync(url, ct).ConfigureAwait(false);
             Log?.Invoke($"загружено {data.Length / 1024} КБ, распаковка…");
 
             Directory.CreateDirectory(CoreDirectory);
@@ -103,12 +113,32 @@ public sealed class SingBoxRunner
         }
     }
 
+    private async Task<byte[]> DownloadArchiveAsync(string url, CancellationToken ct)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/octet-stream"));
+                using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
+                    .ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+                return await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+            }
+            catch (HttpRequestException) when (attempt < 3 && !ct.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(attempt + 1), ct).ConfigureAwait(false);
+            }
+        }
+    }
+
     /// <summary>Актуальный релиз через GitHub API; при сбое — известная свежая версия.</summary>
     private static async Task<(string url, string tag)> GetLatestReleaseAsync(CancellationToken ct)
     {
         try
         {
-            using var http = new HttpClient();
+            using var http = CreateHttp();
             http.Timeout = TimeSpan.FromSeconds(30);
             http.DefaultRequestHeaders.UserAgent.ParseAdd("ExitBoost/1.0");
 
