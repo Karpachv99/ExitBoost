@@ -53,12 +53,27 @@ public static class UpdateInstaller
                 long? fullLength = resp.Content.Headers.ContentRange?.Length;
                 supportsRanges = resp.StatusCode == HttpStatusCode.PartialContent
                     && fullLength is > 0;
-                total = fullLength ?? 0;
+                total = fullLength ?? resp.Content.Headers.ContentLength ?? 0;
             }
         }
 
         if (!supportsRanges || total < ParallelThreshold)
-            return await DownloadSingleAsync(http, url, targetPath, progress, ct).ConfigureAwait(false);
+        {
+            try
+            {
+                return await DownloadSingleAsync(http, url, targetPath, progress, total, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (IOException) when (total >= ParallelThreshold && !ct.IsCancellationRequested)
+            {
+                // Некоторые прокси обрывают обычный ответ примерно на 24 МБ,
+                // хотя GitHub сообщает полный Content-Length. В этом случае
+                // повторяем загрузку диапазонами.
+            }
+        }
+
+        if (total < ParallelThreshold)
+            throw new IOException("Сервер прервал загрузку архива; повторите попытку позже");
 
         int parts = (int)Math.Min(MaxParallel, (total + ChunkSize - 1) / ChunkSize);
         string tempDir = Path.Combine(Path.GetTempPath(), "ExitBoost-dl-" + Guid.NewGuid().ToString("N")[..8]);
@@ -122,12 +137,13 @@ public static class UpdateInstaller
     }
 
     private static async Task<string> DownloadSingleAsync(
-        HttpClient http, string url, string targetPath, IProgress<double>? progress, CancellationToken ct)
+        HttpClient http, string url, string targetPath, IProgress<double>? progress,
+        long expectedLength, CancellationToken ct)
     {
         using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
 
-        long total = resp.Content.Headers.ContentLength ?? 0;
+        long total = resp.Content.Headers.ContentLength ?? expectedLength;
         await using var input = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
         await using var output = File.Create(targetPath);
 
@@ -146,6 +162,9 @@ public static class UpdateInstaller
             lastPercent = percent;
             progress?.Report((double)read / total);
         }
+
+        if (expectedLength > 0 && read != expectedLength)
+            throw new IOException($"Архив скачан не полностью ({read} из {expectedLength} байт)");
 
         progress?.Report(1);
         return targetPath;
