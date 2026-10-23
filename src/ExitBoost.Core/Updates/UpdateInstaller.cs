@@ -75,9 +75,18 @@ public static class UpdateInstaller
             }
             catch (IOException) when (total >= ParallelThreshold && !ct.IsCancellationRequested)
             {
-                // Некоторые прокси обрывают обычный ответ примерно на 24 МБ,
-                // хотя источник сообщает полный Content-Length. В этом случае
-                // повторяем загрузку диапазонами.
+                // Некоторые CDN/прокси обрывают обычный ответ, не закрывая
+                // соединение корректно. Сначала пытаемся продолжить с принятого
+                // байта, а если сервер не поддерживает Range — используем части.
+                try
+                {
+                    return await DownloadResumableAsync(http, url, targetPath, progress, total, ct)
+                        .ConfigureAwait(false);
+                }
+                catch (IOException) when (!ct.IsCancellationRequested)
+                {
+                    // Переходим к независимым диапазонам ниже.
+                }
             }
         }
 
@@ -177,6 +186,77 @@ public static class UpdateInstaller
 
         progress?.Report(1);
         return targetPath;
+    }
+
+    /// <summary>Возобновить оборванную загрузку с Range, сохраняя уже принятые байты.</summary>
+    private static async Task<string> DownloadResumableAsync(
+        HttpClient http, string url, string targetPath, IProgress<double>? progress,
+        long expectedLength, CancellationToken ct)
+    {
+        const int maxAttempts = 8;
+        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            long offset = File.Exists(targetPath) ? new FileInfo(targetPath).Length : 0;
+            if (offset > expectedLength)
+            {
+                File.Delete(targetPath);
+                offset = 0;
+            }
+            if (offset == expectedLength)
+            {
+                progress?.Report(1);
+                return targetPath;
+            }
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            if (offset > 0) request.Headers.Range = new RangeHeaderValue(offset, null);
+
+            try
+            {
+                using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
+                    .ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+
+                if (offset > 0 && (response.StatusCode != HttpStatusCode.PartialContent
+                    || response.Content.Headers.ContentRange?.From != offset))
+                {
+                    // Сервер проигнорировал Range: перезапускаем файл с нуля,
+                    // не допуская склейки полного ответа с его префиксом.
+                    File.Delete(targetPath);
+                    continue;
+                }
+
+                await using var input = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+                await using var output = new FileStream(targetPath,
+                    offset == 0 ? FileMode.Create : FileMode.Append,
+                    FileAccess.Write, FileShare.None, 128 * 1024, useAsync: true);
+                var buffer = new byte[128 * 1024];
+                long received = offset;
+                while (true)
+                {
+                    int count = await input.ReadAsync(buffer, ct).ConfigureAwait(false);
+                    if (count == 0) break;
+                    if (received + count > expectedLength)
+                        throw new IOException("Сервер передал больше данных, чем заявленный размер архива");
+                    await output.WriteAsync(buffer.AsMemory(0, count), ct).ConfigureAwait(false);
+                    received += count;
+                    progress?.Report((double)received / expectedLength);
+                }
+
+                if (received == expectedLength)
+                {
+                    progress?.Report(1);
+                    return targetPath;
+                }
+            }
+            catch (Exception ex) when (ex is HttpRequestException or IOException
+                                       && attempt + 1 < maxAttempts && !ct.IsCancellationRequested)
+            {
+                await Task.Delay(500 * (attempt + 1), ct).ConfigureAwait(false);
+            }
+        }
+
+        throw new IOException($"Сервер несколько раз прервал загрузку ({new FileInfo(targetPath).Length} из {expectedLength} байт)");
     }
 
     private static async Task DownloadPartAsync(
