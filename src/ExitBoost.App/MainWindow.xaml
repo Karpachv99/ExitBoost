@@ -414,7 +414,7 @@
                                               Tag="{Binding VpnTargetSearch, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                               DropDownOpened="VpnTargetsCombo_DropDownOpened"
                                               DropDownClosed="VpnTargetsCombo_DropDownClosed"
-                                              ToolTip="Поиск по запущенным программам и сайтам — например discord, youtube, steam. Выбранный пункт сразу добавляется в список ниже">
+                                               ToolTip="Поиск по запущенным приложениям. Выбранное приложение добавляется в список ниже">
                                         <ComboBox.GroupStyle>
                                             <GroupStyle>
                                                 <GroupStyle.HeaderTemplate>
@@ -426,20 +426,8 @@
                                             </GroupStyle>
                                         </ComboBox.GroupStyle>
                                      </ComboBox>
-                                    <TextBlock Style="{StaticResource Muted}" Margin="0,7,0,2" Text="Выбрано для VPN" />
-                                    <ItemsControl ItemsSource="{Binding VpnSelectedSites}">
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <DockPanel Margin="0,1,0,1">
-                                                    <Button DockPanel.Dock="Right" Content="×" Width="24" Height="22"
-                                                            Command="{Binding DataContext.RemoveVpnSiteCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                            CommandParameter="{Binding}" />
-                                                    <TextBlock Text="{Binding}" VerticalAlignment="Center" Margin="6,0,0,0" />
-                                                </DockPanel>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                    <ItemsControl ItemsSource="{Binding VpnSelectedPrograms}" Margin="0,3,0,0">
+                                     <TextBlock Style="{StaticResource Muted}" Margin="0,7,0,2" Text="Выбранные приложения" />
+                                     <ItemsControl ItemsSource="{Binding VpnSelectedPrograms}" Margin="0,3,0,0">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
                                                 <DockPanel Margin="0,1,0,1">
