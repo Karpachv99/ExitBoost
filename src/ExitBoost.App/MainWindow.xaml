@@ -75,9 +75,7 @@
                         </StackPanel>
                     </Border>
 
-                    <Button Content="Подключить" Style="{StaticResource AccentButton}" Command="{Binding ConnectCommand}" />
-                    <Button Content="Отключить" Style="{StaticResource DangerButton}" Command="{Binding DisconnectCommand}" Margin="8,0,0,0" />
-                    <Button Content="Починить интернет" Command="{Binding RestoreNetworkCommand}" Margin="12,0,0,0"
+                    <Button Content="Починить интернет" Command="{Binding RestoreNetworkCommand}" Margin="0,0,0,0"
                             ToolTip="Если подключение приложения сломало интернет — снимет туннель, вернёт маршруты, очистит DNS-кэш и проверит фактический доступ в сеть." />
                 </StackPanel>
             </Grid>
@@ -126,6 +124,8 @@
                               CanUserResizeColumns="True"
                               CanUserSortColumns="True"
                               EnableRowVirtualization="True"
+                              MouseDoubleClick="VpnKeysGrid_MouseDoubleClick"
+                              ToolTip="Двойной клик по локации — подключить VPN по этому ключу и включить обход DPI"
                               ScrollViewer.HorizontalScrollBarVisibility="Auto">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Локации" Binding="{Binding Name}" Width="*" MinWidth="170" />
@@ -214,8 +214,13 @@
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
-                                        <TextBox Grid.Column="0" Text="{Binding UpdateRepo, UpdateSourceTrigger=PropertyChanged}"
-                                                 ToolTip="Репозиторий GitHub с релизами: «владелец/имя», например ivanov/ExitBoost" />
+                                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Style="{StaticResource Muted}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="Обновления всегда скачиваются с официального репозитория программы">
+                                            <Run Text="Источник: " />
+                                            <Run Text="{Binding UpdateRepo, Mode=OneWay}" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" />
+                                            <Run Text=" (официальный)" />
+                                        </TextBlock>
                                         <Button Grid.Column="1" Content="Проверить обновления" Margin="8,0,0,0"
                                                 Command="{Binding UpdateCheckCommand}" />
                                     </Grid>

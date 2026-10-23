@@ -45,8 +45,8 @@ public sealed class SpeedTester
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("ExitBoost/1.0");
     }
 
-    /// <summary>Размеры замеров: скачивание и отдача (байты).</summary>
-    public long DownloadBytes { get; init; } = 15L * 1024 * 1024;
+    /// <summary>Размеры замеров: скачивание и отдача (байты). Cloudflare отдаёт не больше 10 МБ за запрос.</summary>
+    public long DownloadBytes { get; init; } = 10L * 1024 * 1024;
 
     public long UploadBytes { get; init; } = 4L * 1024 * 1024;
 

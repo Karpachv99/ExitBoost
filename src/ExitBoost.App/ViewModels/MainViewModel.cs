@@ -87,6 +87,7 @@ public sealed class MainViewModel : ObservableObject
         VpnPickTargetsCommand = new RelayCommand(() => PickVpnTargets());
         VpnConnectCommand = new RelayCommand(_ => VpnConnectAsync(), _ => IsVpnRunning is false);
         VpnDisconnectCommand = new RelayCommand(_ => VpnDisconnectAsync(), _ => IsVpnRunning);
+        QuickConnectCommand = new RelayCommand(_ => QuickConnectAsync(), _ => !IsBusy && IsVpnRunning is false);
         VpnInstallCoreCommand = new RelayCommand(_ => VpnInstallCoreAsync(), _ => App.Vpn.IsRunning is false && App.Vpn.IsCoreRunning is false);
         UpdateCheckCommand = new RelayCommand(_ => CheckAppUpdateAsync(manual: true), _ => !IsUpdateBusy);
         UpdateInstallCommand = new RelayCommand(_ => InstallUpdateAsync(), _ => !IsUpdateBusy && _pendingUpdate is not null);
@@ -158,6 +159,9 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand VpnPickTargetsCommand { get; }
     public RelayCommand VpnConnectCommand { get; }
     public RelayCommand VpnDisconnectCommand { get; }
+
+    /// <summary>Двойной клик по строке локации: VPN + обход DPI.</summary>
+    public RelayCommand QuickConnectCommand { get; }
     public RelayCommand VpnInstallCoreCommand { get; }
     public RelayCommand SpeedTestCommand { get; }
 
@@ -558,7 +562,6 @@ public sealed class MainViewModel : ObservableObject
         _dpiAutoUpdate = s.DpiAutoUpdate;
         _dpiCheckUpdates = s.DpiCheckUpdates;
         _closeActionIndex = s.CloseToTray ? 0 : 1;
-        _updateRepo = s.UpdateRepo;
         _checkAppUpdates = s.CheckAppUpdatesOnStart;
     }
 
@@ -1209,7 +1212,9 @@ public sealed class MainViewModel : ObservableObject
     {
         await App.ZapretRunner.StopAsync().ConfigureAwait(true);
         DpiProgressText = "Обход остановлен";
-    }    private async Task CheckDpiAsync()
+    }
+
+    private async Task CheckDpiAsync()
     {
         var target = BuildDpiTarget();
         if (!target.IsValid)
@@ -1540,6 +1545,21 @@ public sealed class MainViewModel : ObservableObject
         await ConnectVpnCoreAsync(key).ConfigureAwait(true);
     }
 
+    /// <summary>
+    /// Двойной клик по локации: подключение VPN по выбранному ключу и запуск обхода DPI
+    /// (если в каталоге выбрана стратегия и обход ещё не работает).
+    /// </summary>
+    private async Task QuickConnectAsync()
+    {
+        if (IsBusy) return;
+
+        await VpnConnectAsync().ConfigureAwait(true);
+        if (!IsVpnRunning) return;
+
+        if (SelectedDpiStrategy is not null && !App.ZapretRunner.IsRunning)
+            await ApplyDpiStrategyAsync().ConfigureAwait(true);
+    }
+
     /// <summary>Подключение ядра VPN по ключу (без диалогов — для общей кнопки «Подключить»).</summary>
     private async Task<bool> ConnectVpnCoreAsync(VpnKey key)
     {
@@ -1583,6 +1603,7 @@ public sealed class MainViewModel : ObservableObject
         {
             VpnConnectCommand.RaiseCanExecuteChanged();
             VpnDisconnectCommand.RaiseCanExecuteChanged();
+            QuickConnectCommand.RaiseCanExecuteChanged();
         }
 
         if (running)
@@ -1649,17 +1670,8 @@ public sealed class MainViewModel : ObservableObject
 
     public string CurrentVersionText => "Версия " + CurrentVersion;
 
-    private string _updateRepo = "";
-    /// <summary>Репозиторий GitHub с релизами: «владелец/имя» или ссылка на репозиторий.</summary>
-    public string UpdateRepo
-    {
-        get => _updateRepo;
-        set
-        {
-            if (!Set(ref _updateRepo, value)) return;
-            _settings.Update(s => s.UpdateRepo = value.Trim());
-        }
-    }
+    /// <summary>Репозиторий обновлений зашит в программу: всегда официальный GitHub.</summary>
+    public string UpdateRepo => AppSettings.OfficialUpdateRepo;
 
     private bool _checkAppUpdates = true;
     public bool CheckAppUpdatesOnStart

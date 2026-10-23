@@ -91,8 +91,11 @@ public sealed class AppSettings
 
     // ------------------------------------------------------------ обновления
 
+    /// <summary>Официальный репозиторий: обновления всегда берутся только отсюда.</summary>
+    public const string OfficialUpdateRepo = "Karpachv99/ExitBoost";
+
     /// <summary>Репозиторий GitHub с релизами в формате «владелец/имя» (откуда обновляться).</summary>
-    public string UpdateRepo { get; set; } = "Karpachv99/ExitBoost";
+    public string UpdateRepo { get; set; } = OfficialUpdateRepo;
 
     /// <summary>Проверять обновления самой программы при запуске.</summary>
     public bool CheckAppUpdatesOnStart { get; set; } = true;

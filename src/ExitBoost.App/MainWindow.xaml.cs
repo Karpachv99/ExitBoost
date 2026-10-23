@@ -1,5 +1,7 @@
 ﻿using System.ComponentModel;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using ExitBoost.App.ViewModels;
 using ExitBoost.Core.Models;
 
@@ -35,6 +37,20 @@ public partial class MainWindow : Window
     private void OnProcessSplitClick(object sender, RoutedEventArgs e) => _viewModel.Mode = RoutingMode.ProcessSplit;
 
     private void OnNetworkSplitClick(object sender, RoutedEventArgs e) => _viewModel.Mode = RoutingMode.NetworkSplit;
+
+    /// <summary>Двойной клик по строке локации: выбрать ключ и подключить VPN (и обход DPI).</summary>
+    private void VpnKeysGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not DataGrid grid) return;
+        if (e.OriginalSource is not DependencyObject source) return;
+
+        var row = ItemsControl.ContainerFromElement(grid, source) as DataGridRow;
+        if (row?.Item is not VpnKeyItemViewModel key) return;
+
+        _viewModel.SelectedVpnKey = key;
+        if (_viewModel.QuickConnectCommand.CanExecute(null))
+            _viewModel.QuickConnectCommand.Execute(null);
+    }
 
     /// <summary>
     /// Крестик: либо свернуть в трей, либо сначала отключить соединение,
