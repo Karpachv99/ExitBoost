@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Net;
 
 namespace ExitBoost.Core.Updates;
 
@@ -28,10 +29,19 @@ public static class UpdateChecker
 
     private static HttpClient CreateHttp()
     {
-        var http = new HttpClient();
+        var http = new HttpClient(new SocketsHttpHandler
+        {
+            AutomaticDecompression = DecompressionMethods.None,
+            PooledConnectionLifetime = TimeSpan.FromMinutes(2)
+        });
         http.Timeout = TimeSpan.FromSeconds(20);
         http.DefaultRequestHeaders.UserAgent.ParseAdd("ExitBoost/1.0");
         http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        http.DefaultRequestHeaders.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue
+        {
+            NoCache = true,
+            NoStore = true
+        };
         return http;
     }
 
@@ -67,7 +77,9 @@ public static class UpdateChecker
         string currentVersion,
         CancellationToken ct = default)
     {
-        string url = $"https://api.github.com/repos/{owner}/{repo}/releases/latest";
+        // Не позволяем прокси/кэшу вернуть предыдущий ответ releases/latest.
+        string cacheBust = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+        string url = $"https://api.github.com/repos/{owner}/{repo}/releases/latest?exitboost={cacheBust}";
         using var resp = await Http.GetAsync(url, ct).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode) return null;
 
