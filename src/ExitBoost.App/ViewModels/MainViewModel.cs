@@ -1600,7 +1600,8 @@ public sealed class MainViewModel : ObservableObject
 
     private bool MatchesDpiTarget(VpnTargetPickItem? item)
     {
-        if (item is null) return false;
+        // В разделе DPI выбираются только запущенные приложения.
+        if (item is null || item.IsSite) return false;
         string filter = _dpiTargetSearch.Trim();
         if (filter.Length == 0) return true;
         return item.Title.Contains(filter, StringComparison.OrdinalIgnoreCase)

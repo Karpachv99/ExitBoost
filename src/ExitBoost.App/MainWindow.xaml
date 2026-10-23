@@ -408,7 +408,7 @@
                                              ToolTip="Сайты, которые пойдут через VPN: youtube.com, discord.com, openai.com" />
 
                                     <ComboBox Margin="0,6,0,0"
-                                              Style="{StaticResource SearchableCombo}"
+                                           Style="{StaticResource SearchableCombo}"
                                               ItemsSource="{Binding VpnTargetsView}"
                                               SelectedItem="{Binding SelectedVpnTarget}"
                                               Tag="{Binding VpnTargetSearch, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
@@ -558,8 +558,8 @@
                                      <TextBox Text="{Binding DpiTargetHosts, UpdateSourceTrigger=PropertyChanged}"
                                               ToolTip="Сайты для обхода DPI: discord.com, youtube.com" />
                                  </Grid>
-                                <ComboBox Margin="0,6,0,0"
-                                          Style="{StaticResource SearchableCombo}"
+                                 <ComboBox Margin="0,6,0,0" MinHeight="38" FontSize="13"
+                                           Style="{StaticResource SearchableCombo}"
                                           ItemsSource="{Binding DpiTargetsView}"
                                           SelectedItem="{Binding SelectedDpiTarget}"
                                           Tag="{Binding DpiTargetSearch, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
