@@ -14,11 +14,22 @@ public sealed class VpnKeyItemViewModel : ObservableObject
 
     public string Id => Key.Id;
 
-    /// <summary>Название точки (колонка «Узел»).</summary>
+    /// <summary>Название точки (колонка «Локации»).</summary>
     public string Name => Key.Name;
 
     /// <summary>Страна из названия ключа.</summary>
     public string Country => VpnCountry.Guess(Key.Name);
+
+    /// <summary>Заголовок группы в таблице: страна, «Игровые серверы» или «Прочее».</summary>
+    public string Group
+    {
+        get
+        {
+            string country = Country;
+            if (country != "—") return country;
+            return Key.Name.Contains("Игров", StringComparison.OrdinalIgnoreCase) ? "Игровые серверы" : "Прочее";
+        }
+    }
 
     public string Protocol => Key.Protocol.ToString();
 
@@ -48,22 +59,43 @@ public sealed class VpnKeyItemViewModel : ObservableObject
     public double Ping
     {
         get => _ping;
-        private set => Set(ref _ping, value);
+        private set
+        {
+            if (!Set(ref _ping, value)) return;
+            OnPropertyChanged(nameof(PingText));
+        }
     }
 
     private double _loss;
     public double Loss
     {
         get => _loss;
-        private set => Set(ref _loss, value);
+        private set
+        {
+            if (!Set(ref _loss, value)) return;
+            OnPropertyChanged(nameof(LossText));
+        }
     }
 
     private double _jitter;
     public double Jitter
     {
         get => _jitter;
-        private set => Set(ref _jitter, value);
+        private set
+        {
+            if (!Set(ref _jitter, value)) return;
+            OnPropertyChanged(nameof(JitterText));
+        }
     }
+
+    /// <summary>Пинг в миллисекундах для показа в таблице.</summary>
+    public string PingText => Ping > 0 ? $"{Ping:0} мс" : "—";
+
+    /// <summary>Потери в процентах для показа в таблице.</summary>
+    public string LossText => Quality == "недоступен" ? "100 %" : Loss > 0 ? $"{Loss:0} %" : "0 %";
+
+    /// <summary>Джиттер для показа в таблице.</summary>
+    public string JitterText => Ping > 0 ? $"{Jitter:0} мс" : "—";
 
     private string _quality = "—";
     public string Quality
@@ -87,6 +119,7 @@ public sealed class VpnKeyItemViewModel : ObservableObject
         Jitter = Math.Round(metrics.JitterMs);
         Quality = metrics.QualityText;
         StatusText = metrics.StatusText;
+        OnPropertyChanged(nameof(LossText));
     }
 
     public void Refresh()
@@ -102,5 +135,9 @@ public sealed class VpnKeyItemViewModel : ObservableObject
         OnPropertyChanged(nameof(Sni));
         OnPropertyChanged(nameof(AddedAt));
         OnPropertyChanged(nameof(Server));
+        OnPropertyChanged(nameof(Group));
+        OnPropertyChanged(nameof(PingText));
+        OnPropertyChanged(nameof(LossText));
+        OnPropertyChanged(nameof(JitterText));
     }
 }

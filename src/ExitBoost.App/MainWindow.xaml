@@ -54,6 +54,19 @@
                     </Border>
 
                     <Border Background="{StaticResource PanelAltBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                            CornerRadius="14" Padding="12,5" Margin="0,0,14,0"
+                            ToolTip="Ключ, через который идёт трафик (в названии ключа — его локация)">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="7" Height="7" Fill="{Binding StateColor, Converter={StaticResource StringToBrush}}" Margin="0,0,7,0" VerticalAlignment="Center" />
+                            <TextBlock FontSize="12" FontWeight="SemiBold" MaxWidth="320" TextTrimming="CharacterEllipsis"
+                                       Foreground="{Binding StateColor, Converter={StaticResource StringToBrush}}">
+                                <Run Text="Ключ: " Foreground="{StaticResource MutedBrush}" />
+                                <Run Text="{Binding HeaderKeyText, Mode=OneWay}" />
+                            </TextBlock>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="{StaticResource PanelAltBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
                             CornerRadius="14" Padding="12,5" Margin="0,0,14,0">
                         <StackPanel Orientation="Horizontal">
                             <Ellipse Width="7" Height="7" Fill="{Binding StateColor, Converter={StaticResource StringToBrush}}" Margin="0,0,7,0" VerticalAlignment="Center" />
@@ -73,8 +86,9 @@
         <!-- ==== Основная область ==== -->
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="500" MinWidth="380" />
-                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="520" MinWidth="360" MaxWidth="1100" />
+                <ColumnDefinition Width="6" />
+                <ColumnDefinition Width="*" MinWidth="480" />
             </Grid.ColumnDefinitions>
 
             <!-- ==== Панель серверов ==== -->
@@ -93,7 +107,7 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Style="{StaticResource H2}" Text="VPN-ключи" />
+                            <TextBlock Style="{StaticResource H2}" Text="Локации" />
                             <Border Background="{StaticResource PanelAltBrush}" CornerRadius="9" Padding="7,1" Margin="8,0,0,0" VerticalAlignment="Center">
                                 <TextBlock Text="{Binding VpnKeyCount}" FontSize="11" Foreground="{StaticResource MutedBrush}" />
                             </Border>
@@ -106,31 +120,58 @@
                     </Grid>
 
                     <DataGrid Grid.Row="1"
-                              ItemsSource="{Binding VpnKeyRows}"
+                              ItemsSource="{Binding VpnKeysView}"
                               SelectedItem="{Binding SelectedVpnKey}"
                               IsReadOnly="True"
-                              EnableRowVirtualization="True">
+                              CanUserResizeColumns="True"
+                              CanUserSortColumns="True"
+                              EnableRowVirtualization="True"
+                              ScrollViewer.HorizontalScrollBarVisibility="Auto">
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="Узел" Binding="{Binding Name}" Width="*" MinWidth="120" />
-                            <DataGridTextColumn Header="Страна" Binding="{Binding Country}" Width="88" />
-                            <DataGridTextColumn Header="Пинг" Binding="{Binding Ping}" Width="58" />
-                            <DataGridTextColumn Header="Потери" Binding="{Binding Loss}" Width="62" />
-                            <DataGridTextColumn Header="Джиттер" Binding="{Binding Jitter}" Width="66" />
-                            <DataGridTextColumn Header="Качество" Binding="{Binding Quality}" Width="84" />
-                            <DataGridTextColumn Header="Протокол" Binding="{Binding Protocol}" Width="88" />
-                            <DataGridTextColumn Header="Адрес" Binding="{Binding Server}" Width="150" />
-                            <DataGridTextColumn Header="Защита" Binding="{Binding Security}" Width="66" />
-                            <DataGridTextColumn Header="Транспорт" Binding="{Binding Transport}" Width="76" />
-                            <DataGridTextColumn Header="Поток" Binding="{Binding Flow}" Width="120" />
-                            <DataGridTextColumn Header="SNI" Binding="{Binding Sni}" Width="*" MinWidth="120" />
-                            <DataGridTextColumn Header="Добавлен" Binding="{Binding AddedAt}" Width="74" />
+                            <DataGridTextColumn Header="Локации" Binding="{Binding Name}" Width="*" MinWidth="170" />
+                            <DataGridTextColumn Header="Пинг" Binding="{Binding PingText}" Width="76" MinWidth="56" />
+                            <DataGridTextColumn Header="Потери" Binding="{Binding LossText}" Width="78" MinWidth="60" />
+                            <DataGridTextColumn Header="Джиттер" Binding="{Binding JitterText}" Width="84" MinWidth="64" />
+                            <DataGridTextColumn Header="Качество" Binding="{Binding Quality}" Width="98" MinWidth="76" />
+                            <DataGridTextColumn Header="Протокол" Binding="{Binding Protocol}" Width="96" MinWidth="76" />
                         </DataGrid.Columns>
+                        <DataGrid.GroupStyle>
+                            <GroupStyle>
+                                <GroupStyle.ContainerStyle>
+                                    <Style TargetType="{x:Type GroupItem}">
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="{x:Type GroupItem}">
+                                                    <Expander IsExpanded="True" Foreground="{StaticResource TextBrush}"
+                                                              Background="Transparent" Padding="0,2,0,2">
+                                                        <Expander.Header>
+                                                            <StackPanel Orientation="Horizontal" Margin="2,4,0,4">
+                                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                                                           Foreground="{StaticResource TextBrush}" />
+                                                                <TextBlock Text="{Binding ItemCount, StringFormat=' ({0})'}"
+                                                                           Foreground="{StaticResource MutedBrush}" />
+                                                            </StackPanel>
+                                                        </Expander.Header>
+                                                        <ItemsPresenter />
+                                                    </Expander>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </GroupStyle.ContainerStyle>
+                            </GroupStyle>
+                        </DataGrid.GroupStyle>
                     </DataGrid>
                 </Grid>
             </Border>
 
+            <!-- ==== Разделитель: ширина левой панели меняется мышью ==== -->
+            <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                          Background="Transparent" ShowsPreview="False" ResizeBehavior="PreviousAndNext"
+                          ToolTip="Потяните, чтобы сделать список локаций шире или уже" />
+
             <!-- ==== Правая панель ==== -->
-            <TabControl Grid.Column="1" Margin="16,12,16,8">
+            <TabControl Grid.Column="2" Margin="16,12,16,8">
                 <TabItem Header="Подключение">
                     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,12,6,0">
                         <StackPanel>
@@ -271,8 +312,17 @@
                                                 Command="{Binding VpnDisconnectCommand}" Margin="0,0,6,4" />
                                     </WrapPanel>
 
-                                    <CheckBox Content="Кнопка «Подключить» поднимает ещё и VPN по ключу" Margin="0,6,0,0"
-                                              IsChecked="{Binding VpnConnectWithRelay}" />
+                                    <Grid Margin="0,10,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" Content="Тест скорости" Command="{Binding SpeedTestCommand}"
+                                                ToolTip="Замер через текущее соединение: пинг, скачивание и отдача (Cloudflare)" />
+                                        <TextBlock Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center"
+                                                   Style="{StaticResource Muted}" TextWrapping="Wrap"
+                                                   Text="{Binding SpeedTestText}" />
+                                    </Grid>
                                 </StackPanel>
                             </Border>
 
@@ -343,7 +393,6 @@
                                 <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                     <CheckBox Content="Проверять обновления при запуске" Margin="0,0,18,0" IsChecked="{Binding DpiCheckUpdates}" />
                                     <CheckBox Content="Обновлять автоматически" Margin="0,0,18,0" IsChecked="{Binding DpiAutoUpdate}" />
-                                    <CheckBox Content="Применять при подключении к узлу" IsChecked="{Binding DpiApplyOnConnect}" />
                                 </StackPanel>
                             </StackPanel>
                         </Border>

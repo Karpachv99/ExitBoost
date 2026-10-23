@@ -21,7 +21,7 @@
         </Grid.RowDefinitions>
 
         <StackPanel Grid.Row="0" Margin="0,0,0,8">
-            <TextBlock Text="Вставьте ключ как в Happ — vless://, vmess://, trojan://, ss:// или hysteria2://" FontSize="13" FontWeight="SemiBold" />
+            <TextBlock Text="Вставьте ключ vless://, vmess://, trojan://, ss:// или hysteria2://" FontSize="13" FontWeight="SemiBold" />
             <TextBlock Text="Можно сразу несколько ключей через перенос строки. Годятся ссылки из подписок (текстом, не QR)."
                        FontSize="11.5" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0" TextWrapping="Wrap" />
         </StackPanel>
@@ -39,7 +39,7 @@
         </Grid>
 
         <TextBlock Grid.Row="2" Style="{StaticResource Muted}" FontSize="11" Margin="0,0,0,8" TextWrapping="Wrap"
-                   Text="При загрузке подписки серверу отправляется идентификатор устройства (HWID) — так же делают Happ и v2rayN: без него часть сервисов отдаёт заглушки вместо ключей. Идентификатор хранится только на этом компьютере." />
+                   Text="При загрузке подписки серверу отправляется идентификатор устройства (HWID) — так делают многие VPN-клиенты: без него часть сервисов отдаёт заглушки вместо ключей. Идентификатор хранится только на этом компьютере." />
 
         <TextBox Grid.Row="3" x:Name="KeysBox" AcceptsReturn="True" TextWrapping="NoWrap"
                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"

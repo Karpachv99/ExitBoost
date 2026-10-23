@@ -12,6 +12,7 @@ using ExitBoost.Core.Diagnostics;
 using ExitBoost.Core.Dpi;
 using ExitBoost.Core.Logging;
 using ExitBoost.Core.Models;
+using ExitBoost.Core.Networking;
 using ExitBoost.Core.Routing;
 using ExitBoost.Core.Tunnel;
 using ExitBoost.Core.Updates;
@@ -95,6 +96,7 @@ public sealed class MainViewModel : ObservableObject
             Clipboard.SetText(string.Join(Environment.NewLine, Logs.Select(l => $"{l.Time} [{l.LevelText}] {l.Message}")));
             return Task.CompletedTask;
         });
+        SpeedTestCommand = new RelayCommand(_ => RunSpeedTestAsync(), _ => !IsSpeedTestRunning);
 
         _probing.StatusUpdated += OnStatusUpdated;
         _log.EntryAdded += OnLogEntry;
@@ -103,6 +105,9 @@ public sealed class MainViewModel : ObservableObject
         _nodesView.Filter = o => MatchesFilter(o as NodeItemViewModel);
         VpnProgramsView = CollectionViewSource.GetDefaultView(Processes);
         ApplyVpnProgramFilter();
+        VpnKeysView = CollectionViewSource.GetDefaultView(VpnKeyRows);
+        VpnKeysView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(VpnKeyItemViewModel.Group)));
+        VpnKeysView.SortDescriptions.Add(new SortDescription(nameof(VpnKeyItemViewModel.Group), ListSortDirection.Ascending));
 
         _uiTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _uiTimer.Tick += (_, _) => Tick();
@@ -154,6 +159,7 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand VpnConnectCommand { get; }
     public RelayCommand VpnDisconnectCommand { get; }
     public RelayCommand VpnInstallCoreCommand { get; }
+    public RelayCommand SpeedTestCommand { get; }
 
     // ---------------------------------------------------------- свойства
 
@@ -659,19 +665,7 @@ public sealed class MainViewModel : ObservableObject
             StateText = "Подключено";
             StateColor = "#2FBF71";
             InterfaceText = $"VPN · {key.Protocol}";
-
-            // Обход DPI поднимаем вместе с VPN, если это включено.
-            if (_settings.Current.DpiApplyOnConnect && SelectedDpiStrategy is not null)
-            {
-                var target = BuildDpiTarget();
-                if (target.IsValid)
-                {
-                    bool started = await App.ZapretRunner.StartAsync(SelectedDpiStrategy.Strategy, target).ConfigureAwait(true);
-                    DpiProgressText = started
-                        ? $"Обход DPI применён: {SelectedDpiStrategy.Name}"
-                        : "Не удалось запустить обход DPI";
-                }
-            }
+            RefreshHeaderKeyText();
         }
         finally
         {
@@ -1255,6 +1249,9 @@ public sealed class MainViewModel : ObservableObject
     /// <summary>Строки таблицы VPN-ключей (в том же виде, что и узлы-ретрансляторы).</summary>
     public ObservableCollection<VpnKeyItemViewModel> VpnKeyRows { get; } = new();
 
+    /// <summary>Таблица локаций: строки, сгруппированные по стране (группы сворачиваются).</summary>
+    public ICollectionView VpnKeysView { get; }
+
     /// <summary>Сколько ключей сохранено (счётчик рядом с заголовком в панели ретрансляторов).</summary>
     public int VpnKeyCount => VpnKeyRows.Count;
 
@@ -1262,7 +1259,11 @@ public sealed class MainViewModel : ObservableObject
     public VpnKeyItemViewModel? SelectedVpnKey
     {
         get => _selectedVpnKey;
-        set => Set(ref _selectedVpnKey, value);
+        set
+        {
+            if (!Set(ref _selectedVpnKey, value)) return;
+            RefreshHeaderKeyText();
+        }
     }
 
     private readonly VpnKeyProber _vpnProber = new();
@@ -1279,6 +1280,44 @@ public sealed class MainViewModel : ObservableObject
     {
         get => _vpnStatusColor;
         set => Set(ref _vpnStatusColor, value);
+    }
+
+    private string _headerKeyText = "ключ не выбран";
+    /// <summary>Ключ, через который идёт (или пойдёт) трафик: в шапке видно сам ключ вместе с его локацией.</summary>
+    public string HeaderKeyText
+    {
+        get => _headerKeyText;
+        private set => Set(ref _headerKeyText, value);
+    }
+
+    /// <summary>Шапка: подключённый ключ, иначе выбранный в таблице.</summary>
+    private void RefreshHeaderKeyText()
+    {
+        bool running = App.Vpn.IsRunning || App.Vpn.IsCoreRunning;
+        string? name = running ? App.Vpn.ActiveKey?.Name : null;
+        name ??= SelectedVpnKey?.Name;
+        HeaderKeyText = string.IsNullOrWhiteSpace(name) ? "ключ не выбран" : name;
+    }
+
+    private readonly SpeedTester _speedTester = new();
+
+    private string _speedTestText = "";
+    /// <summary>Ход и результат теста скорости.</summary>
+    public string SpeedTestText
+    {
+        get => _speedTestText;
+        set => Set(ref _speedTestText, value);
+    }
+
+    private bool _isSpeedTestRunning;
+    public bool IsSpeedTestRunning
+    {
+        get => _isSpeedTestRunning;
+        private set
+        {
+            if (!Set(ref _isSpeedTestRunning, value)) return;
+            SpeedTestCommand.RaiseCanExecuteChanged();
+        }
     }
 
     private bool _isVpnRunning;
@@ -1339,14 +1378,6 @@ public sealed class MainViewModel : ObservableObject
                 OnPropertyChanged(nameof(VpnProgramsSummary));
             }
         }
-    }
-
-    private bool _vpnConnectWithRelay = true;
-    /// <summary>Общая кнопка «Подключить» поднимает ещё и VPN по выбранному ключу.</summary>
-    public bool VpnConnectWithRelay
-    {
-        get => _vpnConnectWithRelay;
-        set => Set(ref _vpnConnectWithRelay, value);
     }
 
     /// <summary>Поиск по списку программ в выпадающем списке.</summary>
@@ -1578,6 +1609,35 @@ public sealed class MainViewModel : ObservableObject
         {
             VpnStatusText = "не активен";
             VpnStatusColor = "#8C95A6";
+        }
+
+        RefreshHeaderKeyText();
+    }
+
+    /// <summary>Замер скорости через текущее соединение (в том числе VPN).</summary>
+    private async Task RunSpeedTestAsync()
+    {
+        if (IsSpeedTestRunning) return;
+
+        IsSpeedTestRunning = true;
+        SpeedTestText = "тест скорости: подготовка…";
+        try
+        {
+            var progress = new Progress<string>(m => SpeedTestText = "тест скорости: " + m);
+            var result = await _speedTester.RunAsync(progress).ConfigureAwait(true);
+            SpeedTestText = result.Ok
+                ? "скорость: " + result.Text
+                : "тест скорости — " + result.Text;
+            _log.Info("Тест скорости: " + result.Text);
+        }
+        catch (Exception ex)
+        {
+            SpeedTestText = "тест скорости — ошибка: " + ex.Message;
+            _log.Warn("Тест скорости не удался: " + ex.Message);
+        }
+        finally
+        {
+            IsSpeedTestRunning = false;
         }
     }
 

@@ -27,6 +27,12 @@ jobs:
       - name: Тесты
         run: dotnet test --nologo
 
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw 'Не удалось установить Inno Setup' }
+
       - name: Сборка и упаковка
         shell: pwsh
         run: |
@@ -54,6 +60,12 @@ jobs:
             "$pwd/dist/ExitBoost.Cli", "$pwd/dist/ExitBoost.Cli-$version-win-x64.zip",
             [System.IO.Compression.CompressionLevel]::Optimal, $false)
 
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) { throw 'ISCC.exe не найден' }
+          & $iscc "/DAppVersion=$version" "/DSourceDir=$pwd/dist/ExitBoost" "/O$pwd/dist" 'installer/ExitBoost.iss'
+          if ($LASTEXITCODE -ne 0) { throw 'Сборка установщика не удалась' }
+          if (-not (Test-Path "$pwd/dist/ExitBoost-$version-setup.exe")) { throw 'Установщик не создан' }
+
       - name: Публикация релиза
         shell: pwsh
         env:
@@ -65,6 +77,7 @@ jobs:
             '${{ github.ref_name }}'.TrimStart('v')
           }
           gh release create "v$version" `
+            "dist/ExitBoost-$version-setup.exe" `
             "dist/ExitBoost-$version-win-x64.zip" `
             "dist/ExitBoost.Cli-$version-win-x64.zip" `
             --title "ExitBoost $version" `
