@@ -47,10 +47,13 @@ public static class UpdateInstaller
                 .ConfigureAwait(false);
             if (resp.IsSuccessStatusCode)
             {
-                supportsRanges = resp.StatusCode == HttpStatusCode.PartialContent;
-                total = resp.Content.Headers.ContentRange?.Length
-                        ?? resp.Content.Headers.ContentLength
-                        ?? 0;
+                // GitHub CDN иногда возвращает 206 с Content-Length только
+                // для фактически отданного фрагмента. Используем диапазоны
+                // только если сервер сообщил полный размер в Content-Range.
+                long? fullLength = resp.Content.Headers.ContentRange?.Length;
+                supportsRanges = resp.StatusCode == HttpStatusCode.PartialContent
+                    && fullLength is > 0;
+                total = fullLength ?? 0;
             }
         }
 
@@ -104,6 +107,10 @@ public static class UpdateInstaller
                     await input.CopyToAsync(output, 256 * 1024, ct).ConfigureAwait(false);
                 }
             }
+
+            long actualLength = new FileInfo(targetPath).Length;
+            if (actualLength != total)
+                throw new IOException($"Архив скачан не полностью ({actualLength} из {total} байт)");
         }
         finally
         {
