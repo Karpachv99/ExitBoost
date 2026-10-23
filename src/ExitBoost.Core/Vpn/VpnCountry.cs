@@ -49,38 +49,45 @@ public static class VpnCountry
         return true;
     }
 
+    private static readonly (string Code, string Country)[] CountryCodes =
+    [
+        ("DE", "Германия"), ("FI", "Финляндия"), ("NL", "Нидерланды"), ("PL", "Польша"),
+        ("LV", "Латвия"), ("EE", "Эстония"), ("SE", "Швеция"), ("FR", "Франция"),
+        ("TR", "Турция"), ("US", "США"), ("GB", "Великобритания"), ("ES", "Испания"),
+        ("IT", "Италия"), ("CA", "Канада"), ("JP", "Япония"), ("CN", "Китай"),
+        ("IN", "Индия"), ("BR", "Бразилия"), ("UA", "Украина"), ("KZ", "Казахстан"),
+        ("GE", "Грузия"), ("AM", "Армения"), ("RS", "Сербия"), ("CZ", "Чехия"),
+        ("AT", "Австрия"), ("CH", "Швейцария"), ("BE", "Бельгия"), ("GR", "Греция"),
+        ("IL", "Израиль"), ("CY", "Кипр"), ("MT", "Мальта"), ("RO", "Румыния"),
+        ("HU", "Венгрия"), ("SK", "Словакия"), ("DK", "Дания"), ("NO", "Норвегия"),
+        ("BG", "Болгария"), ("AL", "Албания"), ("IS", "Исландия"), ("LU", "Люксембург"),
+        ("MC", "Монако"), ("VN", "Вьетнам"), ("SG", "Сингапур"), ("HK", "Гонконг"),
+        ("MY", "Малайзия"), ("TH", "Таиланд"), ("AE", "ОАЭ"), ("IR", "Иран"),
+        ("MD", "Молдова"), ("BY", "Беларусь"), ("UZ", "Узбекистан"),
+        ("AZ", "Азербайджан"), ("CL", "Чили"), ("AR", "Аргентина"), ("ZA", "ЮАР"),
+        ("NZ", "Новая Зеландия"), ("AU", "Австралия"), ("MX", "Мексика"), ("PT", "Португалия"),
+        ("IE", "Ирландия")
+    ];
+
     /// <summary>Страна по флагу (двум буквам кода страны).</summary>
-    private static readonly Dictionary<string, string> FlagCountries = BuildFlagCountries();
+    private static readonly Dictionary<string, string> FlagCountries =
+        CountryCodes.ToDictionary(c => FlagFromCode(c.Code), c => c.Country);
 
-    private static Dictionary<string, string> BuildFlagCountries()
+    /// <summary>Код страны по русскому названию → флаг.</summary>
+    private static readonly Dictionary<string, string> CountryFlags =
+        CountryCodes.ToDictionary(c => c.Country, c => FlagFromCode(c.Code), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Флаг страны по её названию («Германия» → 🇩🇪); пустая строка, если страна неизвестна.</summary>
+    public static string FlagFor(string? country)
+        => country is not null && CountryFlags.TryGetValue(country, out string? flag) ? flag : "";
+
+    /// <summary>Двухбуквенный код страны по названию («Германия» → «DE»).</summary>
+    public static string CodeFor(string? country)
     {
-        (string Code, string Country)[] items =
-        [
-            ("DE", "Германия"), ("FI", "Финляндия"), ("NL", "Нидерланды"), ("PL", "Польша"),
-            ("LV", "Латвия"), ("EE", "Эстония"), ("SE", "Швеция"), ("FR", "Франция"),
-            ("TR", "Турция"), ("US", "США"), ("GB", "Великобритания"), ("ES", "Испания"),
-            ("IT", "Италия"), ("CA", "Канада"), ("JP", "Япония"), ("CN", "Китай"),
-            ("IN", "Индия"), ("BR", "Бразилия"), ("UA", "Украина"), ("KZ", "Казахстан"),
-            ("GE", "Грузия"), ("AM", "Армения"), ("RS", "Сербия"), ("CZ", "Чехия"),
-            ("AT", "Австрия"), ("CH", "Швейцария"), ("BE", "Бельгия"), ("GR", "Греция"),
-            ("IL", "Израиль"), ("CY", "Кипр"), ("MT", "Мальта"), ("RO", "Румыния"),
-            ("HU", "Венгрия"), ("SK", "Словакия"), ("DK", "Дания"), ("NO", "Норвегия"),
-            ("BG", "Болгария"), ("AL", "Албания"), ("IS", "Исландия"), ("LU", "Люксембург"),
-            ("MC", "Монако"), ("VN", "Вьетнам"), ("SG", "Сингапур"), ("HK", "Гонконг"),
-            ("MY", "Малайзия"), ("TH", "Таиланд"), ("AE", "ОАЭ"), ("IR", "Иран"),
-            ("MD", "Молдова"), ("BY", "Беларусь"), ("UZ", "Узбекистан"),
-            ("AZ", "Азербайджан"), ("CL", "Чили"), ("AR", "Аргентина"), ("ZA", "ЮАР"),
-            ("NZ", "Новая Зеландия"), ("AU", "Австралия"), ("MX", "Мексика"), ("PT", "Португалия"),
-            ("IE", "Ирландия")
-        ];
-
-        var map = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (code, country) in items)
-        {
-            if (code.Length != 2) continue;
-            map[FlagFromCode(code)] = country;
-        }
-        return map;
+        if (string.IsNullOrWhiteSpace(country)) return "";
+        foreach (var (code, name) in CountryCodes)
+            if (string.Equals(name, country, StringComparison.OrdinalIgnoreCase)) return code;
+        return "";
     }
 
     /// <summary>Собрать флаг по двухбуквенному коду страны (например, «DE»).</summary>

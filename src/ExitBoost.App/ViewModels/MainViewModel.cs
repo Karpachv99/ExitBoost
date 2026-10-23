@@ -5,6 +5,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Data;
 using System.Windows.Threading;
+using ExitBoost.App;
 using ExitBoost.App.Views;
 using ExitBoost.Core;
 using ExitBoost.Core.Configuration;
@@ -85,9 +86,10 @@ public sealed class MainViewModel : ObservableObject
         VpnAddKeyCommand = new RelayCommand(_ => { AddVpnKey(); return Task.CompletedTask; });
         VpnRemoveKeyCommand = new RelayCommand(_ => { RemoveVpnKey(); return Task.CompletedTask; }, _ => SelectedVpnKey is not null);
         VpnPickTargetsCommand = new RelayCommand(() => PickVpnTargets());
-        VpnConnectCommand = new RelayCommand(_ => VpnConnectAsync(), _ => IsVpnRunning is false);
-        VpnDisconnectCommand = new RelayCommand(_ => VpnDisconnectAsync(), _ => IsVpnRunning);
-        QuickConnectCommand = new RelayCommand(_ => QuickConnectAsync(), _ => !IsBusy && IsVpnRunning is false);
+         VpnConnectCommand = new RelayCommand(_ => VpnConnectAsync(), _ => IsVpnRunning is false && SelectedVpnKey is not null);
+         VpnAndDpiConnectCommand = new RelayCommand(_ => ConnectVpnAndDpiAsync(), _ => !IsBusy && SelectedVpnKey is not null);
+         VpnDisconnectCommand = new RelayCommand(_ => VpnDisconnectAsync(), _ => IsVpnRunning);
+        QuickConnectCommand = new RelayCommand(_ => QuickConnectAsync(), _ => !IsBusy);
         VpnInstallCoreCommand = new RelayCommand(_ => VpnInstallCoreAsync(), _ => App.Vpn.IsRunning is false && App.Vpn.IsCoreRunning is false);
         UpdateCheckCommand = new RelayCommand(_ => CheckAppUpdateAsync(manual: true), _ => !IsUpdateBusy);
         UpdateInstallCommand = new RelayCommand(_ => InstallUpdateAsync(), _ => !IsUpdateBusy && _pendingUpdate is not null);
@@ -104,8 +106,10 @@ public sealed class MainViewModel : ObservableObject
         _controller.StatusChanged += OnControllerStatusChanged;
         _nodesView = CollectionViewSource.GetDefaultView(Nodes);
         _nodesView.Filter = o => MatchesFilter(o as NodeItemViewModel);
-        VpnProgramsView = CollectionViewSource.GetDefaultView(Processes);
-        ApplyVpnProgramFilter();
+        VpnTargetsView = CollectionViewSource.GetDefaultView(VpnTargets);
+        VpnTargetsView.Filter = o => MatchesVpnTarget(o as VpnTargetPickItem);
+        VpnTargetsView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(VpnTargetPickItem.Group)));
+        BuildVpnTargets();
         VpnKeysView = CollectionViewSource.GetDefaultView(VpnKeyRows);
         VpnKeysView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(VpnKeyItemViewModel.Group)));
         VpnKeysView.SortDescriptions.Add(new SortDescription(nameof(VpnKeyItemViewModel.Group), ListSortDirection.Ascending));
@@ -158,6 +162,7 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand VpnRemoveKeyCommand { get; }
     public RelayCommand VpnPickTargetsCommand { get; }
     public RelayCommand VpnConnectCommand { get; }
+    public RelayCommand VpnAndDpiConnectCommand { get; }
     public RelayCommand VpnDisconnectCommand { get; }
 
     /// <summary>Двойной клик по строке локации: VPN + обход DPI.</summary>
@@ -369,6 +374,43 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    private string _dpiProgramSearch = "";
+    public string DpiProgramSearch
+    {
+        get => _dpiProgramSearch;
+        set => Set(ref _dpiProgramSearch, value);
+    }
+
+    private SelectedProcess? _selectedDpiProcess;
+    public SelectedProcess? SelectedDpiProcess
+    {
+        get => _selectedDpiProcess;
+        set
+        {
+            if (!Set(ref _selectedDpiProcess, value) || value is null) return;
+
+            var domains = PickerViewModel.DomainsForProcess(value.Name);
+            if (domains.Count == 0)
+            {
+                DpiProgressText = $"Для {value.Name} нет готового домена — добавьте домен вручную";
+            }
+            else
+            {
+                var existing = DpiTargetHosts
+                    .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .ToList();
+                foreach (string domain in domains)
+                    if (!existing.Contains(domain, StringComparer.OrdinalIgnoreCase)) existing.Add(domain);
+                DpiTargetHosts = string.Join(", ", existing);
+                DpiProgressText = $"Программа {value.Name}: домены добавлены";
+            }
+
+            DpiProgramSearch = "";
+            _selectedDpiProcess = null;
+            OnPropertyChanged(nameof(SelectedDpiProcess));
+        }
+    }
+
     /// <summary>Порт проверки.</summary>
     public int DpiTargetPort
     {
@@ -529,6 +571,7 @@ public sealed class MainViewModel : ObservableObject
             if (!Set(ref _isBusy, value)) return;
             ConnectCommand.RaiseCanExecuteChanged();
             DisconnectCommand.RaiseCanExecuteChanged();
+            QuickConnectCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -634,14 +677,19 @@ public sealed class MainViewModel : ObservableObject
     private async Task ConnectAsync()
     {
         // Точки доступа — это VPN-ключи: подключаемся по выбранному ключу.
-        var key = SelectedVpnKey?.Key ?? App.VpnStore.Keys.FirstOrDefault();
+        var key = SelectedVpnKey?.Key;
         if (key is null)
         {
-            StatusText = "Нет VPN-ключей";
-            StateText = "Нет ключей";
+            bool hasKeys = App.VpnStore.Keys.Count > 0;
+            StatusText = hasKeys ? "Локация не выбрана" : "Нет VPN-ключей";
+            StateText = hasKeys ? "Выберите локацию" : "Нет ключей";
             StateColor = "#F5A524";
-            _log.Warn("Нет сохранённых VPN-ключей — добавьте ключ в левой панели");
-            MessageBox.Show("Добавьте VPN-ключ в левой панели (кнопка «Добавить ключ…») — можно вставить ссылку или адрес подписки.",
+            _log.Warn(hasKeys
+                ? "Локация не выбрана — подключение не начато"
+                : "Нет сохранённых VPN-ключей — добавьте ключ в левой панели");
+            MessageBox.Show(hasKeys
+                    ? "Выберите локацию в списке слева и нажмите «Подключить VPN»."
+                    : "Добавьте VPN-ключ в левой панели (кнопка «Добавить ключ…») — можно вставить ссылку или адрес подписки.",
                 "Нет точек доступа", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -822,6 +870,8 @@ public sealed class MainViewModel : ObservableObject
         {
             SelectedProcess = Processes.FirstOrDefault(p => p.Path == previous.Path && p.Name == previous.Name);
         }
+
+        BuildVpnTargets();
     }
 
     /// <summary>Диалог выбора целен обхода: сайты / история браузера / запущенные программы.</summary>
@@ -840,7 +890,7 @@ public sealed class MainViewModel : ObservableObject
     private void PickVpnTargets()
     {
         var owner = Application.Current?.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive);
-        var dialog = new DpiTargetPickerWindow(VpnDomainsText) { Owner = owner };
+        var dialog = new DpiTargetPickerWindow(VpnDomainsText, forVpn: true) { Owner = owner };
 
         if (dialog.ShowDialog() != true) return;
 
@@ -1268,6 +1318,9 @@ public sealed class MainViewModel : ObservableObject
         {
             if (!Set(ref _selectedVpnKey, value)) return;
             RefreshHeaderKeyText();
+            VpnConnectCommand.RaiseCanExecuteChanged();
+            VpnAndDpiConnectCommand.RaiseCanExecuteChanged();
+            VpnRemoveKeyCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -1381,33 +1434,48 @@ public sealed class MainViewModel : ObservableObject
             {
                 SaveVpnRouting();
                 OnPropertyChanged(nameof(VpnProgramsSummary));
+                OnPropertyChanged(nameof(VpnSelectedPrograms));
             }
         }
     }
 
-    /// <summary>Поиск по списку программ в выпадающем списке.</summary>
-    private string _vpnProgramSearch = "";
-    public string VpnProgramSearch
+    public IEnumerable<string> VpnSelectedPrograms => VpnProcsText
+        .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    /// <summary>Поиск по списку «программы и сайты» — прямо в выпадающем списке.</summary>
+    private string _vpnTargetSearch = "";
+    public string VpnTargetSearch
     {
-        get => _vpnProgramSearch;
+        get => _vpnTargetSearch;
         set
         {
-            if (Set(ref _vpnProgramSearch, value)) ApplyVpnProgramFilter();
+            if (Set(ref _vpnTargetSearch, value)) VpnTargetsView.Refresh();
         }
     }
 
-    /// <summary>Программы, подходящие под поиск (для выпадающего списка).</summary>
-    public ICollectionView VpnProgramsView { get; }
+    /// <summary>Программы и сайты, подходящие под поиск (для выпадающего списка).</summary>
+    public ICollectionView VpnTargetsView { get; }
 
-    private SelectedProcess? _selectedVpnProgram;
-    /// <summary>Программа, добавленная в список «программы через VPN».</summary>
-    public SelectedProcess? SelectedVpnProgram
+    /// <summary>Всё, что можно добавить: запущенные программы + популярные сайты.</summary>
+    public ObservableCollection<VpnTargetPickItem> VpnTargets { get; } = new();
+
+    private VpnTargetPickItem? _selectedVpnTarget;
+    /// <summary>Выбранный пункт: программа идёт в «программы через VPN», сайт — в «сайты через VPN».</summary>
+    public VpnTargetPickItem? SelectedVpnTarget
     {
-        get => _selectedVpnProgram;
+        get => _selectedVpnTarget;
         set
         {
-            if (!Set(ref _selectedVpnProgram, value)) return;
-            if (value is not null) AddVpnProgram(value);
+            if (!Set(ref _selectedVpnTarget, value)) return;
+            if (value is null) return;
+
+            if (value.IsSite) AddVpnSite(value.Value);
+            else AddVpnProgram(value.Value);
+
+            // Сброс поиска и выбора, чтобы тот же пункт можно было выбрать снова.
+            _selectedVpnTarget = null;
+            OnPropertyChanged(nameof(SelectedVpnTarget));
+            VpnTargetSearch = "";
         }
     }
 
@@ -1417,12 +1485,62 @@ public sealed class MainViewModel : ObservableObject
             ? "Программы не выбраны — трафик идёт по правилам сайтов"
             : "Через VPN: " + VpnProcsText;
 
-    private void AddVpnProgram(SelectedProcess process)
+    /// <summary>Пересобрать список программ и сайтов (после запуска/остановки программ).</summary>
+    public void BuildVpnTargets()
     {
-        string exe = process.Name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
-            ? process.Name
-            : process.Name + ".exe";
+        VpnTargets.Clear();
 
+        foreach (var p in Processes)
+        {
+            string exe = p.Name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? p.Name : p.Name + ".exe";
+            VpnTargets.Add(new VpnTargetPickItem
+            {
+                IsSite = false,
+                Title = exe,
+                Subtitle = string.IsNullOrWhiteSpace(p.WindowTitle) ? "Запущенная программа" : p.WindowTitle,
+                Value = exe
+            });
+        }
+
+        foreach (var (name, hint, _, domains) in PickerViewModel.BuildServices())
+        {
+            foreach (string domain in domains)
+            {
+                VpnTargets.Add(new VpnTargetPickItem
+                {
+                    IsSite = true,
+                    Title = domain,
+                    Subtitle = name + " — " + hint,
+                    Value = domain
+                });
+            }
+        }
+
+        VpnTargetsView.Refresh();
+    }
+
+    private bool MatchesVpnTarget(VpnTargetPickItem? item)
+    {
+        if (item is null) return false;
+        string filter = _vpnTargetSearch.Trim();
+        if (filter.Length == 0) return true;
+        return item.Title.Contains(filter, StringComparison.OrdinalIgnoreCase)
+            || item.Subtitle.Contains(filter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void AddVpnSite(string domain)
+    {
+        var list = VpnDomainsText
+            .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        if (list.Any(d => d.Equals(domain, StringComparison.OrdinalIgnoreCase))) return;
+
+        list.Add(domain);
+        VpnDomainsText = string.Join(", ", list);
+    }
+
+    private void AddVpnProgram(string exe)
+    {
         var list = VpnProcsText
             .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .ToList();
@@ -1432,20 +1550,7 @@ public sealed class MainViewModel : ObservableObject
             VpnProcsText = string.Join(", ", list);
         }
 
-        VpnProgramSearch = "";
         OnPropertyChanged(nameof(VpnProgramsSummary));
-    }
-
-    private void ApplyVpnProgramFilter()
-    {
-        string filter = VpnProgramSearch.Trim();
-        VpnProgramsView.Filter = o =>
-        {
-            if (o is not SelectedProcess p) return false;
-            if (filter.Length == 0) return true;
-            return p.DisplayName.Contains(filter, StringComparison.OrdinalIgnoreCase)
-                || p.Name.Contains(filter, StringComparison.OrdinalIgnoreCase);
-        };
     }
 
     private static readonly string[] DefaultVpnDomains =
@@ -1458,7 +1563,9 @@ public sealed class MainViewModel : ObservableObject
 
         VpnKeyRows.Clear();
         foreach (var key in App.VpnStore.Keys) VpnKeyRows.Add(new VpnKeyItemViewModel(key));
-        SelectedVpnKey = VpnKeyRows.FirstOrDefault(r => r.Id == selectedId) ?? VpnKeyRows.FirstOrDefault();
+
+        // Ключ не выбирается автоматически: локацию пользователь выбирает сам.
+        SelectedVpnKey = selectedId is null ? null : VpnKeyRows.FirstOrDefault(r => r.Id == selectedId);
 
         VpnDomainsText = App.VpnStore.Routing.Domains.Count > 0
             ? string.Join(", ", App.VpnStore.Routing.Domains)
@@ -1491,13 +1598,19 @@ public sealed class MainViewModel : ObservableObject
         };
         if (dialog.ShowDialog() is not true || dialog.ResultKeys.Count == 0) return;
 
+        string subscriptionName = dialog.SubscriptionName;
         foreach (var key in dialog.ResultKeys)
         {
             if (App.VpnStore.Keys.Any(k => k.RawLink == key.RawLink)) continue;
+            key.SubscriptionName = subscriptionName;
             App.VpnStore.Keys.Add(key);
         }
         App.VpnStore.Save();
         VpnReloadFromStore();
+
+        // Только что добавленный ключ сразу выделяем — но не выбираем ничего за пользователя.
+        var addedIds = dialog.ResultKeys.Select(k => k.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        SelectedVpnKey = VpnKeyRows.FirstOrDefault(r => addedIds.Contains(r.Id));
     }
 
     private void RemoveVpnKey()
@@ -1531,10 +1644,10 @@ public sealed class MainViewModel : ObservableObject
 
     private async Task VpnConnectAsync()
     {
-        var key = SelectedVpnKey?.Key ?? App.VpnStore.Keys.FirstOrDefault();
+        var key = SelectedVpnKey?.Key;
         if (key is null)
         {
-            VpnStatusText = "нет ключей — добавьте ключ vless/vmess/trojan/ss";
+            VpnStatusText = "выберите локацию в списке слева";
             VpnStatusColor = "#F5A524";
             return;
         }
@@ -1546,18 +1659,46 @@ public sealed class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Двойной клик по локации: подключение VPN по выбранному ключу и запуск обхода DPI
+    /// Двойной клик по локации: переключение на этот ключ и запуск обхода DPI
     /// (если в каталоге выбрана стратегия и обход ещё не работает).
     /// </summary>
     private async Task QuickConnectAsync()
     {
         if (IsBusy) return;
 
-        await VpnConnectAsync().ConfigureAwait(true);
+        var target = SelectedVpnKey?.Key;
+        if (target is null) return;
+
+        if (IsVpnRunning)
+        {
+            if (App.Vpn.ActiveKey?.Id == target.Id) return; // уже подключены к этой локации
+            await App.Vpn.DisconnectAsync().ConfigureAwait(true);
+            await Task.Delay(400).ConfigureAwait(true);
+        }
+
+        if (!IsVpnRunning)
+            await VpnConnectAsync().ConfigureAwait(true);
         if (!IsVpnRunning) return;
 
         if (SelectedDpiStrategy is not null && !App.ZapretRunner.IsRunning)
             await ApplyDpiStrategyAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Запускает оба независимых слоя: VPN для списка VPN-доменов/процессов
+    /// и zapret для отдельного списка доменов обхода DPI.
+    /// </summary>
+    private async Task ConnectVpnAndDpiAsync()
+    {
+        if (SelectedVpnKey is null) return;
+
+        await VpnConnectAsync().ConfigureAwait(true);
+
+        // Ошибка VPN не мешает запустить обход DPI: это независимые компоненты.
+        if (SelectedDpiStrategy is not null)
+            await ApplyDpiStrategyAsync().ConfigureAwait(true);
+        else
+            DpiProgressText = "Выберите стратегию DPI и нажмите «Применить»";
     }
 
     /// <summary>Подключение ядра VPN по ключу (без диалогов — для общей кнопки «Подключить»).</summary>
@@ -1762,15 +1903,9 @@ public sealed class MainViewModel : ObservableObject
             UpdateStatusText = $"доступна версия {info.Version} ({info.SizeText})";
             _log.Info($"Обновления: доступна версия {info.Version} (сейчас {CurrentVersion})");
 
-            string notes = string.IsNullOrWhiteSpace(info.Notes) ? "" : "\n\n" + Shorten(info.Notes.Trim(), 700);
-            var answer = MessageBox.Show(
-                $"Доступно обновление ExitBoost {info.Version} (у вас {CurrentVersion}).{notes}\n\n" +
-                "Скачать и установить сейчас? Программа сама перезапустится на новой версии.",
-                "Обновление ExitBoost",
-                MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes);
-
-            if (answer == MessageBoxResult.Yes)
-                await InstallUpdateAsync().ConfigureAwait(true);
+            // Проверка остаётся тихой: доступная версия показывается в разделе
+            // «Обновления», а решение об установке принимает пользователь кнопкой.
+            UpdateStatusText = $"доступна версия {info.Version} ({info.SizeText}) — установите вручную кнопкой ниже";
         }
         catch (Exception ex)
         {

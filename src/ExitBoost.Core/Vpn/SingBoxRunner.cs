@@ -185,8 +185,12 @@ public sealed class SingBoxRunner
             if (proc.HasExited)
             {
                 lock (_lock) if (_proc == proc) _proc = null;
-                return new ConnectResult(false,
-                    $"ядро не смогло запуститься ({key.Protocol} {key.Address}:{key.Port}).{ReadLogTail()}");
+                string tail = ReadLogTail();
+                string reason = tail.Contains("actively refused", StringComparison.OrdinalIgnoreCase)
+                    || tail.Contains("connection refused", StringComparison.OrdinalIgnoreCase)
+                    ? "сервер ключа отклонил соединение — локация недоступна или сервер выключен"
+                    : $"ядро не смогло запуститься ({key.Protocol} {key.Address}:{key.Port}).{tail}";
+                return new ConnectResult(false, reason);
             }
 
             ActiveKey = key;

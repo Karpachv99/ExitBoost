@@ -8,6 +8,9 @@ public sealed class VpnKey
     /// <summary>Понятное имя (из ссылки или заданное пользователем).</summary>
     public string Name { get; set; } = "";
 
+    /// <summary>Название подписки/набора ключей, из которого добавлен ключ.</summary>
+    public string SubscriptionName { get; set; } = "";
+
     public VpnProtocol Protocol { get; set; }
 
     /// <summary>Адрес сервера (домен или IP).</summary>

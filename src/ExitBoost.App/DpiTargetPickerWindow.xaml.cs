@@ -15,10 +15,22 @@ public partial class DpiTargetPickerWindow : Window
 {
     public PickerViewModel Model { get; }
 
-    public DpiTargetPickerWindow(string initialDomains)
+    /// <param name="forVpn">
+    /// true — окно открыто из раздела VPN (заголовок и подсказки про сайты через VPN),
+    /// false — из раздела обхода DPI.
+    /// </param>
+    public DpiTargetPickerWindow(string initialDomains, bool forVpn = false)
     {
         InitializeComponent();
-        Model = new PickerViewModel(initialDomains);
+        Title = forVpn ? "Выбор сайтов для VPN" : "Выбор целей обхода DPI";
+        if (forVpn)
+        {
+            SearchHint.Text = "Поиск сайта или программы для VPN: discord, youtube, steam…";
+            PopularTab.Header = "Популярные сайты для VPN";
+            BrowserTab.Header = "Сайты из браузера";
+            ProcessTab.Header = "Программы для VPN";
+        }
+        Model = new PickerViewModel(initialDomains, forVpn);
         DataContext = Model;
     }
 
@@ -72,7 +84,16 @@ public sealed record ProcessPick(string Name, string Title)
 
 public sealed class PickerViewModel : ObservableObject
 {
-    public PickerViewModel(string initialDomains)
+    public static IReadOnlyList<string> DomainsForProcess(string processName)
+    {
+        string name = processName.ToLowerInvariant();
+        string? service = KnownPrograms.FirstOrDefault(g => name.Contains(g.Key)).Service;
+        return service is null
+            ? []
+            : BuildServices().FirstOrDefault(s => s.Name == service).Domains ?? [];
+    }
+
+    public PickerViewModel(string initialDomains, bool forVpn = false)
     {
         LoadHistoryCommand = new RelayCommand(() => LoadHistory());
         PickProcessCommand = new RelayCommand(() => ApplyProcessSelection());
@@ -316,7 +337,8 @@ public sealed class PickerViewModel : ObservableObject
 
     // Соответствие «программы» из KnownPrograms → группа сайтов ниже.
 
-    private static IEnumerable<(string Name, string Hint, bool Default, List<string> Domains)> BuildServices() =>
+    /// <summary>Популярные сервисы и их домены — используются и в списке «программы и сайты через VPN».</summary>
+    public static IEnumerable<(string Name, string Hint, bool Default, List<string> Domains)> BuildServices() =>
     [
         ("Discord", "Клиент, CDN, медиа и голос", true,
             ["discord.com", "discordapp.com", "cdn.discordapp.com", "gateway.discord.gg", "discord.gg", "discord.media", "dl.discordapp.net"]),

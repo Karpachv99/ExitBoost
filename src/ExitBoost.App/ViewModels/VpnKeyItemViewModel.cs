@@ -20,18 +20,54 @@ public sealed class VpnKeyItemViewModel : ObservableObject
     /// <summary>Страна из названия ключа.</summary>
     public string Country => VpnCountry.Guess(Key.Name);
 
-    /// <summary>Заголовок группы в таблице: страна, «Игровые серверы» или «Прочее».</summary>
-    public string Group
+    /// <summary>Группа — подписка целиком, а не отдельная страна.</summary>
+    public string Group => string.IsNullOrWhiteSpace(Key.SubscriptionName)
+        ? "Добавленные ключи"
+        : Key.SubscriptionName;
+
+    public string Protocol => Key.Protocol.ToString();
+
+    /// <summary>Флаг страны для строки списка («🇩🇪»); пусто, если страна не определилась.</summary>
+    public string Flag => VpnCountry.FlagFor(Country);
+
+    /// <summary>Короткое обозначение транспорта: RAW TCP, XHTTP, WS, gRPC, REALITY…</summary>
+    public string TransportLabel
     {
         get
         {
-            string country = Country;
-            if (country != "—") return country;
-            return Key.Name.Contains("Игров", StringComparison.OrdinalIgnoreCase) ? "Игровые серверы" : "Прочее";
+            string transport = Key.Transport.ToLowerInvariant();
+            if (transport is "tcp" or "" or "raw")
+                return Key.Security.Equals("reality", StringComparison.OrdinalIgnoreCase) ? "REALITY" : "RAW TCP";
+
+            return transport switch
+            {
+                "ws" => "WS",
+                "grpc" => "gRPC",
+                "h2" or "http" => "HTTP/2",
+                "httpupgrade" => "HTTPUPGRADE",
+                "quic" => "QUIC",
+                _ => transport.ToUpperInvariant()
+            };
         }
     }
 
-    public string Protocol => Key.Protocol.ToString();
+    /// <summary>Заголовок строки: «Германия | RAW TCP» (или название ключа, если страна не определилась).</summary>
+    public string TitleText => Country == "—"
+        ? Name
+        : $"{Country} | {TransportLabel}";
+
+    /// <summary>Подробности под заголовком: «VLESS / TCP / TLS».</summary>
+    public string DetailsText
+    {
+        get
+        {
+            var parts = new List<string>(3) { Key.Protocol.ToString().ToUpperInvariant() };
+            if (Key.Transport.Length > 0) parts.Add(Key.Transport.ToUpperInvariant());
+            if (!Key.Security.Equals("none", StringComparison.OrdinalIgnoreCase) && Key.Security.Length > 0)
+                parts.Add(Key.Security.ToUpperInvariant());
+            return string.Join(" / ", parts);
+        }
+    }
 
     public string Address => Key.Address;
 
@@ -101,8 +137,23 @@ public sealed class VpnKeyItemViewModel : ObservableObject
     public string Quality
     {
         get => _quality;
-        private set => Set(ref _quality, value);
+        private set
+        {
+            if (!Set(ref _quality, value)) return;
+            OnPropertyChanged(nameof(QualityColor));
+        }
     }
+
+    /// <summary>Цвет оценки качества для строки списка.</summary>
+    public string QualityColor => Quality switch
+    {
+        "отлично" => "#2FBF71",
+        "хорошо" => "#8ED16B",
+        "средне" => "#F5A524",
+        "плохо" => "#EF4444",
+        "недоступен" => "#EF4444",
+        _ => "#8C95A6"
+    };
 
     private string _statusText = "измерение…";
     public string StatusText
@@ -136,8 +187,13 @@ public sealed class VpnKeyItemViewModel : ObservableObject
         OnPropertyChanged(nameof(AddedAt));
         OnPropertyChanged(nameof(Server));
         OnPropertyChanged(nameof(Group));
+        OnPropertyChanged(nameof(Flag));
+        OnPropertyChanged(nameof(TransportLabel));
+        OnPropertyChanged(nameof(TitleText));
+        OnPropertyChanged(nameof(DetailsText));
         OnPropertyChanged(nameof(PingText));
         OnPropertyChanged(nameof(LossText));
         OnPropertyChanged(nameof(JitterText));
+        OnPropertyChanged(nameof(QualityColor));
     }
 }

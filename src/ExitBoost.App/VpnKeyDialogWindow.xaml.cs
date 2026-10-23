@@ -13,6 +13,7 @@ public partial class VpnKeyDialogWindow : Window
 {
     /// <summary>Разобранные ключи (после DialogResult=true).</summary>
     public IReadOnlyList<VpnKey> ResultKeys { get; private set; } = [];
+    public string SubscriptionName { get; private set; } = "Добавленные ключи";
 
     public VpnKeyDialogWindow()
     {
@@ -53,12 +54,17 @@ public partial class VpnKeyDialogWindow : Window
         PreviewText.Foreground = FindResource("MutedBrush") as System.Windows.Media.Brush;
         try
         {
+            SubscriptionName = GetSubscriptionName(url);
             string text = await VpnSubscription.DownloadAsync(url).ConfigureAwait(true);
             KeysBox.Text = text;
             var keys = VpnSubscription.ParseAll(text, out var errors);
+            int unsupported = errors.Count(e => e.Contains("поддерживается только Xray", StringComparison.OrdinalIgnoreCase));
+            int invalid = errors.Count - unsupported;
             PreviewText.Text = keys.Count > 0
-                ? $"Загружено ключей: {keys.Count}" + (errors.Count > 0 ? $", не распознано: {errors.Count}" : "")
-                : "Ссылка не содержит ключей (ожидались vless://, vmess://, trojan:// или ss://)";
+                ? $"Распознано ключей: {keys.Count}"
+                    + (unsupported > 0 ? $", неподдерживаемых sing-box: {unsupported}" : "")
+                    + (invalid > 0 ? $", ошибочных строк: {invalid}" : "")
+                : "Ссылка не содержит поддерживаемых ключей (vless://, vmess://, trojan://, ss:// или hysteria2://)";
             PreviewText.Foreground = keys.Count > 0
                 ? System.Windows.Media.Brushes.LightGreen
                 : FindResource("WarnBrush") as System.Windows.Media.Brush;
@@ -73,6 +79,24 @@ public partial class VpnKeyDialogWindow : Window
         finally
         {
             UrlBox.IsEnabled = true;
+        }
+    }
+
+    private static string GetSubscriptionName(string url)
+    {
+        try
+        {
+            var host = new Uri(url).Host;
+            var parts = host.Split('.', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0) return "Подписка";
+            string name = parts[0].Equals("key", StringComparison.OrdinalIgnoreCase) && parts.Length > 1
+                ? parts[1]
+                : parts[0];
+            return name.Length == 0 ? "Подписка" : char.ToUpperInvariant(name[0]) + name[1..];
+        }
+        catch
+        {
+            return "Подписка";
         }
     }
 
