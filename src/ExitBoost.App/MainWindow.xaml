@@ -59,7 +59,12 @@
                                                  Text="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                                  ToolTip="Введите часть названия программы или сайта" />
 
-                                        <ScrollViewer Grid.Row="1" MaxHeight="280" VerticalScrollBarVisibility="Auto">
+                                        <ScrollViewer Grid.Row="1" MaxHeight="280"
+                                                      Focusable="True"
+                                                      CanContentScroll="True"
+                                                      PanningMode="VerticalOnly"
+                                                      HorizontalScrollBarVisibility="Disabled"
+                                                      VerticalScrollBarVisibility="Auto">
                                             <ItemsPresenter />
                                         </ScrollViewer>
                                     </Grid>
@@ -407,8 +412,8 @@
                                     <TextBox Text="{Binding VpnDomainsText}"
                                              ToolTip="Сайты, которые пойдут через VPN: youtube.com, discord.com, openai.com" />
 
-                                    <ComboBox Margin="0,6,0,0"
-                                           Style="{StaticResource SearchableCombo}"
+                                     <ComboBox Margin="0,6,0,0" MinHeight="38" FontSize="13"
+                                            Style="{StaticResource SearchableCombo}"
                                               ItemsSource="{Binding VpnTargetsView}"
                                               SelectedItem="{Binding SelectedVpnTarget}"
                                               Tag="{Binding VpnTargetSearch, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"

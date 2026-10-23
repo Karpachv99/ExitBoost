@@ -23,7 +23,8 @@ public static class UpdateInstaller
         string url,
         string targetPath,
         IProgress<double>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        long expectedSize = 0)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
 
@@ -38,7 +39,7 @@ public static class UpdateInstaller
         http.DefaultRequestHeaders.UserAgent.ParseAdd("ExitBoost/1.0");
 
         // Узнаём размер файла и поддерживает ли сервер докачку по диапазонам.
-        long total = 0;
+        long total = expectedSize;
         bool supportsRanges = false;
         using (var probe = new HttpRequestMessage(HttpMethod.Get, url))
         {
@@ -53,7 +54,15 @@ public static class UpdateInstaller
                 long? fullLength = resp.Content.Headers.ContentRange?.Length;
                 supportsRanges = resp.StatusCode == HttpStatusCode.PartialContent
                     && fullLength is > 0;
-                total = fullLength ?? resp.Content.Headers.ContentLength ?? 0;
+                if (fullLength is > 0)
+                {
+                    total = fullLength.Value;
+                    supportsRanges = resp.StatusCode == HttpStatusCode.PartialContent;
+                }
+                else if (resp.StatusCode != HttpStatusCode.PartialContent && resp.Content.Headers.ContentLength is > 0)
+                {
+                    total = resp.Content.Headers.ContentLength.Value;
+                }
             }
         }
 

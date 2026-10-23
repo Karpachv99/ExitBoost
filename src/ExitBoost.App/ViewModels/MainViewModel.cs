@@ -2013,7 +2013,8 @@ public sealed class MainViewModel : ObservableObject
         {
             var progress = new Progress<double>(p =>
                 UpdateStatusText = $"скачивание обновления… {p:P0}");
-            await UpdateInstaller.DownloadAsync(info.AssetUrl, zip, progress).ConfigureAwait(true);
+            await UpdateInstaller.DownloadAsync(info.AssetUrl, zip, progress,
+                expectedSize: info.AssetSize).ConfigureAwait(true);
 
             UpdateStatusText = "устанавливаю… программа сейчас перезапустится";
             string dir = UpdateInstaller.InstallDirectory;
