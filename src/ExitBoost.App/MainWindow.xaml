@@ -433,6 +433,37 @@
                                     <TextBox Text="{Binding VpnDomainsText}"
                                              ToolTip="Сайты, которые пойдут через VPN: youtube.com, discord.com, openai.com" />
 
+                                    <Expander Margin="0,8,0,0" IsExpanded="True"
+                                              HorizontalContentAlignment="Stretch"
+                                              Foreground="{StaticResource TextBrush}">
+                                        <Expander.Header>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="Добавленные сайты" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource TextBrush}" />
+                                                <TextBlock Text="{Binding VpnSelectedSitesCount, StringFormat=' ({0})'}"
+                                                           Foreground="{StaticResource MutedBrush}" />
+                                            </StackPanel>
+                                        </Expander.Header>
+                                        <Border Background="{StaticResource PanelAltBrush}" CornerRadius="6"
+                                                Padding="6" Margin="0,4,0,0">
+                                            <ScrollViewer MaxHeight="190" VerticalScrollBarVisibility="Auto"
+                                                          HorizontalScrollBarVisibility="Disabled">
+                                                <ItemsControl ItemsSource="{Binding VpnSelectedSites}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <DockPanel Margin="0,1,0,1">
+                                                                <Button DockPanel.Dock="Right" Content="×" Width="24" Height="22"
+                                                                        Command="{Binding DataContext.RemoveVpnSiteCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                        CommandParameter="{Binding}" />
+                                                                <TextBlock Text="{Binding}" VerticalAlignment="Center" Margin="6,0,0,0" />
+                                                            </DockPanel>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </ScrollViewer>
+                                        </Border>
+                                    </Expander>
+
                                      <ComboBox Margin="0,6,0,0" MinHeight="38" FontSize="13"
                                             Style="{StaticResource SearchableCombo}"
                                               ItemsSource="{Binding VpnTargetsView}"
@@ -596,18 +627,36 @@
                                           DropDownOpened="VpnTargetsCombo_DropDownOpened"
                                            DropDownClosed="DpiTargetsCombo_DropDownClosed"
                                            ToolTip="Поиск сайта или программы для обхода DPI" />
-                                 <ItemsControl ItemsSource="{Binding DpiSelectedTargets}" Margin="0,6,0,0">
-                                     <ItemsControl.ItemTemplate>
-                                         <DataTemplate>
-                                             <DockPanel Margin="0,1,0,1">
-                                                 <Button DockPanel.Dock="Right" Content="×" Width="24" Height="22"
-                                                         Command="{Binding DataContext.RemoveDpiTargetCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                         CommandParameter="{Binding}" />
-                                                 <TextBlock Text="{Binding}" VerticalAlignment="Center" Margin="6,0,0,0" />
-                                             </DockPanel>
-                                         </DataTemplate>
-                                     </ItemsControl.ItemTemplate>
-                                 </ItemsControl>
+                                 <Expander Margin="0,8,0,0" IsExpanded="True"
+                                           HorizontalContentAlignment="Stretch"
+                                           Foreground="{StaticResource TextBrush}">
+                                     <Expander.Header>
+                                         <StackPanel Orientation="Horizontal">
+                                             <TextBlock Text="Добавленные сайты" FontWeight="SemiBold"
+                                                        Foreground="{StaticResource TextBrush}" />
+                                             <TextBlock Text="{Binding DpiSelectedTargetsCount, StringFormat=' ({0})'}"
+                                                        Foreground="{StaticResource MutedBrush}" />
+                                         </StackPanel>
+                                     </Expander.Header>
+                                     <Border Background="{StaticResource PanelAltBrush}" CornerRadius="6"
+                                             Padding="6" Margin="0,4,0,0">
+                                         <ScrollViewer MaxHeight="190" VerticalScrollBarVisibility="Auto"
+                                                       HorizontalScrollBarVisibility="Disabled">
+                                             <ItemsControl ItemsSource="{Binding DpiSelectedTargets}">
+                                                 <ItemsControl.ItemTemplate>
+                                                     <DataTemplate>
+                                                         <DockPanel Margin="0,1,0,1">
+                                                             <Button DockPanel.Dock="Right" Content="×" Width="24" Height="22"
+                                                                     Command="{Binding DataContext.RemoveDpiTargetCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                     CommandParameter="{Binding}" />
+                                                             <TextBlock Text="{Binding}" VerticalAlignment="Center" Margin="6,0,0,0" />
+                                                         </DockPanel>
+                                                     </DataTemplate>
+                                                 </ItemsControl.ItemTemplate>
+                                             </ItemsControl>
+                                         </ScrollViewer>
+                                     </Border>
+                                 </Expander>
                                 <TextBlock Style="{StaticResource Muted}" Margin="0,10,0,4"
                                            Text="Готовый список заблокированных сервисов РФ" />
                                 <ComboBox SelectedIndex="{Binding BlockedPresetIndex, Mode=TwoWay}" MinHeight="34">

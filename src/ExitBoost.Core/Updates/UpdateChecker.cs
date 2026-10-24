@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 namespace ExitBoost.Core.Updates;
 
 /// <summary>
-/// Проверка обновлений через GitLab Releases API.
+/// Проверка обновлений: основной источник — GitLab Releases, резервный — GitHub.
 /// Сначала читается строгий манифест update.json; если его нет — используется
 /// старый формат с ZIP-ассетом и размером из release notes.
 /// </summary>
@@ -64,8 +64,9 @@ public static class UpdateChecker
     }
 
     /// <summary>
-    /// Проверить наличие новой версии. В отличие от старой реализации,
-    /// ошибка сети/HTTP возвращается как <see cref="UpdateCheckStatus.Failed"/>,
+    /// Проверить наличие новой версии. Сначала GitLab; если он недоступен
+    /// (сеть, блокировка, ошибка API), проверяется зеркало GitHub.
+    /// Ошибка обоих источников возвращается как <see cref="UpdateCheckStatus.Failed"/>,
     /// а не маскируется под «обновлений нет».
     /// </summary>
     public static async Task<UpdateCheckResult> CheckAsync(
@@ -78,6 +79,27 @@ public static class UpdateChecker
         if (string.IsNullOrWhiteSpace(owner) || string.IsNullOrWhiteSpace(repo))
             return UpdateCheckResult.Failed("не задан репозиторий обновлений");
 
+        UpdateCheckResult gitlab = await CheckGitLabAsync(owner, repo, currentVersion, channel, ct)
+            .ConfigureAwait(false);
+        if (gitlab.Status != UpdateCheckStatus.Failed)
+            return gitlab;
+
+        UpdateCheckResult github = await CheckGitHubAsync(owner, repo, currentVersion, channel, ct)
+            .ConfigureAwait(false);
+        if (github.Status != UpdateCheckStatus.Failed)
+            return github;
+
+        return UpdateCheckResult.Failed(
+            $"GitLab: {gitlab.Error}; зеркало GitHub: {github.Error}");
+    }
+
+    private static async Task<UpdateCheckResult> CheckGitLabAsync(
+        string owner,
+        string repo,
+        string currentVersion,
+        string channel,
+        CancellationToken ct)
+    {
         try
         {
             string projectPath = Uri.EscapeDataString($"{owner}/{repo}");
@@ -118,9 +140,9 @@ public static class UpdateChecker
             GitLabAssetLink? manifestLink = links.FirstOrDefault(IsManifestLink);
             if (manifestLink is not null)
             {
-                var manifestResult = await ReadManifestAsync(
-                    manifestLink.Url, releaseVersion, pageUrl, currentVersion, channel, ct).ConfigureAwait(false);
-                return manifestResult;
+                return await ReadManifestAsync(
+                    manifestLink.Url, releaseVersion, pageUrl, currentVersion, channel,
+                    UpdateSource.Manifest, ct).ConfigureAwait(false);
             }
 
             // Переходный fallback: релиз без манифеста (например, 1.0.16).
@@ -132,15 +154,163 @@ public static class UpdateChecker
         }
         catch (TaskCanceledException)
         {
-            return UpdateCheckResult.Failed("таймаут проверки обновлений");
+            return UpdateCheckResult.Failed("таймаут проверки обновлений GitLab");
         }
         catch (HttpRequestException ex)
         {
-            return UpdateCheckResult.Failed("ошибка сети: " + ex.Message);
+            return UpdateCheckResult.Failed("ошибка сети GitLab: " + ex.Message);
         }
         catch (Exception ex)
         {
-            return UpdateCheckResult.Failed("не удалось проверить обновления: " + ex.Message);
+            return UpdateCheckResult.Failed("не удалось проверить обновления GitLab: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Проверка зеркала GitHub без обращения к GitLab. Сначала пробуем прямой
+    /// адрес последнего манифеста (без API-лимитов), затем GitHub API — он нужен
+    /// для старых релизов без update.json.
+    /// </summary>
+    public static async Task<UpdateCheckResult> CheckGitHubAsync(
+        string owner,
+        string repo,
+        string currentVersion,
+        string channel = "stable",
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(owner) || string.IsNullOrWhiteSpace(repo))
+            return UpdateCheckResult.Failed("не задан репозиторий зеркала");
+
+        UpdateCheckResult direct = await CheckGitHubDirectAsync(owner, repo, currentVersion, channel, ct)
+            .ConfigureAwait(false);
+        if (direct.Status != UpdateCheckStatus.Failed)
+            return direct;
+
+        UpdateCheckResult api = await CheckGitHubApiAsync(owner, repo, currentVersion, channel, ct)
+            .ConfigureAwait(false);
+        if (api.Status != UpdateCheckStatus.Failed)
+            return api;
+
+        return UpdateCheckResult.Failed($"{direct.Error}; API GitHub: {api.Error}");
+    }
+
+    private static async Task<UpdateCheckResult> CheckGitHubDirectAsync(
+        string owner,
+        string repo,
+        string currentVersion,
+        string channel,
+        CancellationToken ct)
+    {
+        try
+        {
+            string url =
+                $"https://github.com/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(repo)}/releases/latest/download/update.json";
+            (UpdateManifest? manifest, string error) = await DownloadManifestAsync(url, ct).ConfigureAwait(false);
+            if (manifest is null)
+                return UpdateCheckResult.Failed(error);
+
+            string releaseVersion = manifest.Tag.Length > 0 ? manifest.Tag : "v" + manifest.Version;
+            string pageUrl =
+                $"https://github.com/{owner}/{repo}/releases/tag/{Uri.EscapeDataString(releaseVersion)}";
+            return BuildManifestResult(
+                manifest, releaseVersion, pageUrl, currentVersion, channel, url,
+                UpdateSource.GitHubManifest);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (TaskCanceledException)
+        {
+            return UpdateCheckResult.Failed("таймаут проверки зеркала GitHub");
+        }
+        catch (HttpRequestException ex)
+        {
+            return UpdateCheckResult.Failed("ошибка сети GitHub: " + ex.Message);
+        }
+        catch (Exception ex)
+        {
+            return UpdateCheckResult.Failed("не удалось проверить зеркало GitHub: " + ex.Message);
+        }
+    }
+
+    private static async Task<UpdateCheckResult> CheckGitHubApiAsync(
+        string owner,
+        string repo,
+        string currentVersion,
+        string channel,
+        CancellationToken ct)
+    {
+        try
+        {
+            string url = $"https://api.github.com/repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(repo)}/releases/latest";
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Accept.ParseAdd("application/vnd.github+json");
+
+            using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
+                .ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                string detail = await ReadErrorAsync(response, ct).ConfigureAwait(false);
+                return UpdateCheckResult.Failed(
+                    $"GitHub вернул {(int)response.StatusCode} {response.ReasonPhrase}{detail}");
+            }
+
+            string json = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            GitHubRelease? release;
+            try
+            {
+                release = JsonSerializer.Deserialize<GitHubRelease>(json);
+            }
+            catch (JsonException ex)
+            {
+                return UpdateCheckResult.Failed("некорректный ответ GitHub: " + ex.Message);
+            }
+
+            if (release is null || string.IsNullOrWhiteSpace(release.TagName))
+                return UpdateCheckResult.Failed("в ответе GitHub нет тега релиза");
+
+            string tag = release.TagName.Trim();
+            string releaseVersion = UpdateVersion.Normalize(tag);
+            if (!UpdateVersion.IsValid(releaseVersion))
+                return UpdateCheckResult.Failed($"не удалось разобрать версию из тега «{tag}»");
+
+            string pageUrl = $"https://github.com/{owner}/{repo}/releases/tag/{Uri.EscapeDataString(tag)}";
+            string notes = release.Body ?? "";
+            var links = (release.Assets ?? new List<GitHubAsset>())
+                .Select(asset => new GitLabAssetLink
+                {
+                    Name = asset.Name ?? "",
+                    Url = asset.BrowserDownloadUrl ?? "",
+                    LinkType = "package"
+                })
+                .ToList();
+
+            GitLabAssetLink? manifestLink = links.FirstOrDefault(IsManifestLink);
+            if (manifestLink is not null)
+            {
+                return await ReadManifestAsync(
+                    manifestLink.Url, releaseVersion, pageUrl, currentVersion, channel,
+                    UpdateSource.GitHubManifest, ct).ConfigureAwait(false);
+            }
+
+            return BuildLegacyResult(links, releaseVersion, tag, pageUrl, notes, currentVersion);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (TaskCanceledException)
+        {
+            return UpdateCheckResult.Failed("таймаут проверки GitHub API");
+        }
+        catch (HttpRequestException ex)
+        {
+            return UpdateCheckResult.Failed("ошибка сети GitHub API: " + ex.Message);
+        }
+        catch (Exception ex)
+        {
+            return UpdateCheckResult.Failed("не удалось проверить GitHub API: " + ex.Message);
         }
     }
 
@@ -150,29 +320,51 @@ public static class UpdateChecker
         string releasePageUrl,
         string currentVersion,
         string channel,
+        UpdateSource source,
+        CancellationToken ct)
+    {
+        (UpdateManifest? manifest, string error) = await DownloadManifestAsync(manifestUrl, ct).ConfigureAwait(false);
+        if (manifest is null)
+            return UpdateCheckResult.Failed(error);
+
+        return BuildManifestResult(
+            manifest, releaseVersion, releasePageUrl, currentVersion, channel, manifestUrl, source);
+    }
+
+    private static async Task<(UpdateManifest? Manifest, string Error)> DownloadManifestAsync(
+        string manifestUrl,
         CancellationToken ct)
     {
         if (!Uri.TryCreate(manifestUrl, UriKind.Absolute, out Uri? manifestUri)
-            || !manifestUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
-            || !(manifestUri.Host.Equals("gitlab.com", StringComparison.OrdinalIgnoreCase)
-                 || manifestUri.Host.EndsWith(".gitlab.com", StringComparison.OrdinalIgnoreCase)))
+            || !IsAllowedReleaseUri(manifestUri))
         {
-            return UpdateCheckResult.Failed("ссылка на манифест должна вести на https://gitlab.com");
+            return (null, "ссылка на манифест должна вести на https://gitlab.com или https://github.com");
         }
 
-        string url = WithCacheBust(manifestUrl);
-        using var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        using var response = await Http.GetAsync(manifestUrl, HttpCompletionOption.ResponseHeadersRead, ct)
+            .ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             string detail = await ReadErrorAsync(response, ct).ConfigureAwait(false);
-            return UpdateCheckResult.Failed(
-                $"не удалось скачать манифест: HTTP {(int)response.StatusCode}{detail}");
+            return (null, $"не удалось скачать манифест: HTTP {(int)response.StatusCode}{detail}");
         }
 
         string json = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!UpdateManifest.TryParse(json, out UpdateManifest manifest, out string parseError))
-            return UpdateCheckResult.Failed("манифест обновления некорректен: " + parseError);
+            return (null, "манифест обновления некорректен: " + parseError);
 
+        return (manifest, "");
+    }
+
+    private static UpdateCheckResult BuildManifestResult(
+        UpdateManifest manifest,
+        string releaseVersion,
+        string releasePageUrl,
+        string currentVersion,
+        string channel,
+        string manifestUrl,
+        UpdateSource source)
+    {
         if (!manifest.Channel.Equals(channel, StringComparison.OrdinalIgnoreCase))
         {
             return UpdateCheckResult.Failed(
@@ -186,9 +378,9 @@ public static class UpdateChecker
                        && UpdateVersion.IsNewer(manifest.MinVersion, currentVersion);
 
         string pageUrl = Uri.TryCreate(manifest.NotesUrl, UriKind.Absolute, out Uri? notesUri)
-            && notesUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
-                ? manifest.NotesUrl
-                : releasePageUrl;
+                         && notesUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            ? manifest.NotesUrl
+            : releasePageUrl;
 
         var info = new UpdateInfo
         {
@@ -204,7 +396,7 @@ public static class UpdateChecker
             Mandatory = manifest.Mandatory || tooOld,
             MinVersion = manifest.MinVersion,
             ManifestUrl = manifestUrl,
-            Source = UpdateSource.Manifest
+            Source = source
         };
 
         // Тег релиза и версия манифеста должны совпадать — иначе легко
@@ -238,12 +430,7 @@ public static class UpdateChecker
             return UpdateCheckResult.Failed("в релизе нет ZIP-архива приложения");
 
         if (!Uri.TryCreate(zipLink.Url, UriKind.Absolute, out Uri? uri)
-            || !uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
-            || !(uri.Host.Equals("gitlab.com", StringComparison.OrdinalIgnoreCase)
-                 || uri.Host.EndsWith(".gitlab.com", StringComparison.OrdinalIgnoreCase)
-                 || uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
-                 || uri.Host.EndsWith(".github.com", StringComparison.OrdinalIgnoreCase)
-                 || uri.Host.EndsWith(".githubusercontent.com", StringComparison.OrdinalIgnoreCase)))
+            || !IsAllowedReleaseUri(uri))
         {
             return UpdateCheckResult.Failed("ссылка на архив ведёт на неизвестный хост");
         }
@@ -302,14 +489,22 @@ public static class UpdateChecker
         return score;
     }
 
+    private static bool IsAllowedReleaseUri(Uri uri)
+    {
+        if (!uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) return false;
+        string host = uri.Host;
+        return host.Equals("gitlab.com", StringComparison.OrdinalIgnoreCase)
+               || host.EndsWith(".gitlab.com", StringComparison.OrdinalIgnoreCase)
+               || host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
+               || host.EndsWith(".github.com", StringComparison.OrdinalIgnoreCase)
+               || host.EndsWith(".githubusercontent.com", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string SafeFileName(string url)
     {
         try { return Path.GetFileName(new Uri(url).AbsolutePath); }
         catch { return ""; }
     }
-
-    private static string WithCacheBust(string url)
-        => url + (url.Contains('?') ? "&" : "?") + "exitboost=" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     private static async Task<string> ReadErrorAsync(HttpResponseMessage response, CancellationToken ct)
     {
@@ -344,5 +539,19 @@ public static class UpdateChecker
         [JsonPropertyName("name")] public string Name { get; set; } = "";
         [JsonPropertyName("url")] public string Url { get; set; } = "";
         [JsonPropertyName("link_type")] public string LinkType { get; set; } = "other";
+    }
+
+    private sealed class GitHubRelease
+    {
+        [JsonPropertyName("tag_name")] public string TagName { get; set; } = "";
+        [JsonPropertyName("body")] public string? Body { get; set; }
+        [JsonPropertyName("assets")] public List<GitHubAsset>? Assets { get; set; }
+    }
+
+    private sealed class GitHubAsset
+    {
+        [JsonPropertyName("name")] public string Name { get; set; } = "";
+        [JsonPropertyName("browser_download_url")] public string BrowserDownloadUrl { get; set; } = "";
+        [JsonPropertyName("size")] public long Size { get; set; }
     }
 }

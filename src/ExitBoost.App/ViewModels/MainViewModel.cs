@@ -389,11 +389,14 @@ public sealed class MainViewModel : ObservableObject
             if (!Set(ref _dpiTargetHosts, value)) return;
             _settings.Update(s => s.DpiTargetHosts = value);
             OnPropertyChanged(nameof(DpiSelectedTargets));
+            OnPropertyChanged(nameof(DpiSelectedTargetsCount));
         }
     }
 
     public IEnumerable<string> DpiSelectedTargets => DpiTargetHosts
         .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    public int DpiSelectedTargetsCount => DpiSelectedTargets.Count();
 
     // ------------------------------------------- готовый список заблокированных
 
@@ -1228,7 +1231,7 @@ public sealed class MainViewModel : ObservableObject
 
     // ------------------------------------------------------------- обход DPI
 
-    private DpiTarget BuildDpiTarget()
+    private async Task<DpiTarget> BuildDpiTargetAsync()
     {
         var target = new DpiTarget
         {
@@ -1241,10 +1244,50 @@ public sealed class MainViewModel : ObservableObject
         if (_blockedPreset != BlockedListPreset.Off)
         {
             string path = BlockedLists.ListPath(_blockedPreset);
-            if (File.Exists(path)) target.ExtraHostListPaths.Add(path);
+            if (File.Exists(path))
+            {
+                target.ExtraHostListPaths.Add(path);
+
+                // Своих доменов нет — для автоподбора и проверки берём
+                // несколько доменов из готового списка. В hostlist они не
+                // добавляются: список уже передан отдельным файлом.
+                if (target.HostList.Count == 0)
+                {
+                    var preset = _blockedPreset;
+                    IReadOnlyList<string> sample = await Task
+                        .Run(() => BlockedLists.Sample(preset, 4))
+                        .ConfigureAwait(true);
+                    target.ProbeHosts = sample.ToList();
+                }
+            }
         }
 
         return target;
+    }
+
+    /// <summary>Скачать готовый список, если его ещё нет. false — список недоступен.</summary>
+    private async Task<bool> EnsureBlockedListAsync()
+    {
+        if (_blockedPreset == BlockedListPreset.Off) return true;
+
+        string path = BlockedLists.ListPath(_blockedPreset);
+        if (File.Exists(path)) return true;
+
+        DpiProgressText = "загрузка готового списка…";
+        var info = await BlockedLists
+            .EnsureAsync(_blockedPreset, false, message => _log.Info(message))
+            .ConfigureAwait(true);
+
+        _blockedListInfo = info;
+        if (!info.Ok)
+        {
+            DpiProgressText = $"Готовый список недоступен: {info.Error}";
+            return false;
+        }
+
+        string updated = info.UpdatedAt is { } at ? $", обновлён {at:dd.MM.yyyy}" : "";
+        BlockedListStatus = $"{BlockedLists.DisplayName(_blockedPreset)}: {info.Count:N0} доменов{updated}";
+        return true;
     }
 
     private void FillDpiStrategies(ZapretCatalog catalog)
@@ -1304,10 +1347,17 @@ public sealed class MainViewModel : ObservableObject
             if (!App.Zapret.IsInstalled) return;
         }
 
-        var target = BuildDpiTarget();
+        if (!await EnsureBlockedListAsync().ConfigureAwait(true)) return;
+
+        var target = await BuildDpiTargetAsync().ConfigureAwait(true);
         if (!target.IsValid)
         {
-            DpiProgressText = "Укажите домены через запятую";
+            DpiProgressText = "Укажите домены через запятую или включите готовый список";
+            return;
+        }
+        if (target.ProbeHostList.Count == 0)
+        {
+            DpiProgressText = "Готовый список пуст — добавьте домены вручную";
             return;
         }
 
@@ -1367,24 +1417,12 @@ public sealed class MainViewModel : ObservableObject
         {
             // Готовый список мог ещё не скачаться — без него применение
             // молча шло бы только по своим доменам.
-            if (_blockedPreset != BlockedListPreset.Off &&
-                !File.Exists(BlockedLists.ListPath(_blockedPreset)))
-            {
-                DpiProgressText = "загрузка готового списка…";
-                var info = await BlockedLists
-                    .EnsureAsync(_blockedPreset, false, message => _log.Info(message))
-                    .ConfigureAwait(true);
-                if (!info.Ok)
-                {
-                    DpiProgressText = $"Готовый список недоступен: {info.Error}";
-                    return;
-                }
-            }
+            if (!await EnsureBlockedListAsync().ConfigureAwait(true)) return;
 
-            var target = BuildDpiTarget();
+            var target = await BuildDpiTargetAsync().ConfigureAwait(true);
             if (!target.IsValid)
             {
-                DpiProgressText = "Укажите домены через запятую";
+                DpiProgressText = "Укажите домены через запятую или включите готовый список";
                 return;
             }
 
@@ -1408,15 +1446,17 @@ public sealed class MainViewModel : ObservableObject
 
     private async Task CheckDpiAsync()
     {
-        var target = BuildDpiTarget();
+        if (!await EnsureBlockedListAsync().ConfigureAwait(true)) return;
+
+        var target = await BuildDpiTargetAsync().ConfigureAwait(true);
         if (!target.IsValid)
         {
-            DpiProgressText = "Укажите домены через запятую";
+            DpiProgressText = "Укажите домены через запятую или включите готовый список";
             return;
         }
-        if (target.HostList.Count == 0)
+        if (target.ProbeHostList.Count == 0)
         {
-            DpiProgressText = "Для проверки нужен хотя бы один свой домен — готовый список проверяется при применении";
+            DpiProgressText = "Нет доменов для проверки — добавьте домен или включите готовый список";
             return;
         }
 
@@ -1432,7 +1472,7 @@ public sealed class MainViewModel : ObservableObject
             if (App.ZapretRunner.IsRunning && SelectedDpiStrategy is not null)
             {
                 var withBypass = await DpiProbe
-                    .MeasureAsync(target.HostList.First(), target.Port)
+                    .MeasureAsync(target.ProbeHostList.First(), target.Port)
                     .ConfigureAwait(true);
                 DpiBestText = withBypass.Ok
                     ? $"{withBypass.TlsMs:F0} мс с обходом ({SelectedDpiStrategy.Name})"
@@ -1572,6 +1612,7 @@ public sealed class MainViewModel : ObservableObject
             if (!Set(ref _vpnDomainsText, value)) return;
             SaveVpnRouting();
             OnPropertyChanged(nameof(VpnSelectedSites));
+            OnPropertyChanged(nameof(VpnSelectedSitesCount));
         }
     }
 
@@ -1612,6 +1653,8 @@ public sealed class MainViewModel : ObservableObject
 
     public IEnumerable<string> VpnSelectedSites => VpnDomainsText
         .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    public int VpnSelectedSitesCount => VpnSelectedSites.Count();
 
     private void RemoveVpnSite(object? parameter)
     {
@@ -2043,11 +2086,11 @@ public sealed class MainViewModel : ObservableObject
 
     public string CurrentVersionText => "Версия " + CurrentVersion;
 
-    /// <summary>Репозиторий обновлений зашит в программу: всегда официальный GitLab.</summary>
+    /// <summary>Репозиторий обновлений зашит в программу: GitLab и его зеркало GitHub.</summary>
     public string UpdateRepo => AppSettings.OfficialUpdateRepo;
 
     /// <summary>Источник обновлений для отображения.</summary>
-    public string UpdateSourceText => "gitlab.com/" + UpdateRepo;
+    public string UpdateSourceText => "gitlab.com/" + UpdateRepo + " · зеркало github.com/" + UpdateRepo;
 
     private bool _checkAppUpdates = true;
     public bool CheckAppUpdatesOnStart

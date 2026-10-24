@@ -42,6 +42,12 @@ public sealed class DpiTarget
     /// </summary>
     public List<string> ExtraHostListPaths { get; set; } = [];
 
+    /// <summary>
+    /// Домены для замера, когда своих доменов нет, но включён готовый список.
+    /// В сам hostlist они не попадают: список уже передаётся отдельным файлом.
+    /// </summary>
+    public List<string> ProbeHosts { get; set; } = [];
+
     /// <summary>Разделённые домены.</summary>
     public IReadOnlyList<string> HostList => Hosts
         .Split(new[] { ',', ';', ' ', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
@@ -49,6 +55,9 @@ public sealed class DpiTarget
         .Where(h => h.Length > 0)
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .ToList();
+
+    /// <summary>Домены для замера: свои, иначе выборка из готового списка.</summary>
+    public IReadOnlyList<string> ProbeHostList => HostList.Count > 0 ? HostList : ProbeHosts;
 
     public bool IsValid => HostList.Count > 0 || ExtraHostListPaths.Count > 0;
 }

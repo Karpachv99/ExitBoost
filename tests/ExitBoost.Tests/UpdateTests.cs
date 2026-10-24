@@ -106,10 +106,20 @@ public class UpdateTests
     [Theory]
     [InlineData("http://gitlab.com/x/y/app.zip")]
     [InlineData("https://evil.example/app.zip")]
+    [InlineData("https://github.com.evil.example/x/y/app.zip")]
     public void Manifest_Rejects_Foreign_Asset_Host(string url)
     {
         Assert.False(UpdateManifest.TryParse(ValidManifest(assetUrl: url), out _, out string error));
         Assert.NotEqual("", error);
+    }
+
+    [Theory]
+    [InlineData("https://github.com/Karpachv99/ExitBoost/releases/download/v1.0.17/app.zip")]
+    [InlineData("https://objects.githubusercontent.com/github-production-release-asset/app.zip")]
+    public void Manifest_Accepts_GitHub_Asset_Host(string url)
+    {
+        Assert.True(UpdateManifest.TryParse(ValidManifest(assetUrl: url), out UpdateManifest manifest, out string error), error);
+        Assert.Equal(url, manifest.Asset!.Url);
     }
 
     [Fact]

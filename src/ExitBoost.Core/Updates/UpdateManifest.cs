@@ -123,7 +123,7 @@ public sealed class UpdateManifest
         if (!Uri.TryCreate(manifest.Asset.Url, UriKind.Absolute, out Uri? assetUri)
             || !IsAllowedAssetUri(assetUri))
         {
-            error = "ссылка на архив должна вести на https://gitlab.com";
+            error = "ссылка на архив должна вести на https://gitlab.com или https://github.com";
             return false;
         }
 
@@ -147,7 +147,10 @@ public sealed class UpdateManifest
     {
         if (!uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) return false;
         return uri.Host.Equals("gitlab.com", StringComparison.OrdinalIgnoreCase)
-               || uri.Host.EndsWith(".gitlab.com", StringComparison.OrdinalIgnoreCase);
+               || uri.Host.EndsWith(".gitlab.com", StringComparison.OrdinalIgnoreCase)
+               || uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
+               || uri.Host.EndsWith(".github.com", StringComparison.OrdinalIgnoreCase)
+               || uri.Host.EndsWith(".githubusercontent.com", StringComparison.OrdinalIgnoreCase);
     }
 }
 

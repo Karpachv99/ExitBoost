@@ -202,6 +202,59 @@ public static class BlockedLists
         return result;
     }
 
+    /// <summary>
+    /// Несколько доменов из готового списка для замера DPI, когда своих доменов
+    /// нет. Сначала ищем популярные заблокированные сервисы: на них видно,
+    /// помогает ли стратегия. Если их нет — берём первые домены списка.
+    /// </summary>
+    public static IReadOnlyList<string> Sample(BlockedListPreset preset, int count = 4, CancellationToken ct = default)
+    {
+        if (preset == BlockedListPreset.Off || count <= 0) return Array.Empty<string>();
+        return SampleFile(ListPath(preset), count, ct);
+    }
+
+    /// <summary>Выборка доменов из указанного файла (для тестов и повторного использования).</summary>
+    public static IReadOnlyList<string> SampleFile(string path, int count = 4, CancellationToken ct = default)
+    {
+        if (count <= 0 || !File.Exists(path)) return Array.Empty<string>();
+
+        var popular = new List<string>(count);
+        var first = new List<string>(count);
+
+        using var reader = new StreamReader(path, Encoding.UTF8);
+        while (reader.ReadLine() is { } line)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (line.Length == 0) continue;
+
+            if (first.Count < count) first.Add(line);
+
+            if (ProbeCandidates.Contains(line)
+                && !popular.Contains(line, StringComparer.OrdinalIgnoreCase))
+            {
+                popular.Add(line);
+                if (popular.Count >= count) break;
+            }
+        }
+
+        return popular.Count > 0 ? popular : first;
+    }
+
+    private static readonly HashSet<string> ProbeCandidates = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "youtube.com",
+        "discord.com",
+        "instagram.com",
+        "facebook.com",
+        "x.com",
+        "twitter.com",
+        "telegram.org",
+        "openai.com",
+        "twitch.tv",
+        "spotify.com",
+        "steamcommunity.com"
+    };
+
     /// <summary>Очистить сырой список в файл; вернуть количество доменов.</summary>
     public static int SanitizeFile(string sourcePath, string targetPath)
     {

@@ -14,7 +14,7 @@ public sealed class DpiOptimizer
     public DpiOptimizer(ZapretRunner runner) => _runner = runner;
 
     /// <summary>Понятное описание ошибки замера (вместо системных сообщений Windows).</summary>
-    private static string FriendlyError(string error)
+    private static string FriendlyError(string? error)
     {
         if (string.IsNullOrEmpty(error)) return error;
 
@@ -40,7 +40,7 @@ public sealed class DpiOptimizer
     {
         await _runner.StopAsync().ConfigureAwait(false);
 
-        var host = target.HostList.FirstOrDefault();
+        var host = target.ProbeHostList.FirstOrDefault();
         if (host is null) return DpiProbeResult.Failed("не указаны домены");
 
         int ok = 0;
@@ -77,7 +77,7 @@ public sealed class DpiOptimizer
         CancellationToken ct = default)
     {
         var results = new List<DpiStrategyResult>();
-        var host = target.HostList.FirstOrDefault();
+        var host = target.ProbeHostList.FirstOrDefault();
         if (host is null) return results;
 
         foreach (var strategy in strategies)

@@ -17,7 +17,8 @@ param(
     [ValidateSet('stable', 'beta')]
     [string]$Channel = 'stable',
     [switch]$Mandatory,
-    [switch]$SkipStop
+    [switch]$SkipStop,
+    [switch]$PublishGitHub
 )
 
 $ErrorActionPreference = 'Stop'
@@ -28,6 +29,10 @@ Set-Location $root
 $projectId = 88008209
 $projectPath = 'karpachv99/ExitBoost'
 $packageName = 'exitboost'
+
+# GitHub — зеркало обновлений на случай, если GitLab недоступен.
+$githubOwner = 'Karpachv99'
+$githubRepo = 'ExitBoost'
 
 if (-not $Version) {
     $m = Select-String -Path 'src\ExitBoost.App\ExitBoost.App.csproj' -Pattern '<Version>([^<]+)</Version>'
@@ -108,6 +113,7 @@ Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 New-Item -ItemType Directory -Path $release -Force | Out-Null
 Get-ChildItem $release -File | Remove-Item -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $release 'github') -Recurse -Force -ErrorAction SilentlyContinue
 
 $zip = Join-Path $release "ExitBoost-$Version-win-x64.zip"
 [System.IO.Compression.ZipFile]::CreateFromDirectory(
@@ -188,6 +194,35 @@ $manifestPath = Join-Path $release 'update.json'
 Write-JsonFile -Path $manifestPath -Json ($manifest | ConvertTo-Json -Depth 6)
 Write-Host "Манифест: $manifestPath" -ForegroundColor Green
 
+# --- манифест зеркала GitHub ------------------------------------------------
+# GitHub-релиз содержит свой update.json: ссылки внутри него ведут на ассеты
+# GitHub, иначе при недоступном GitLab скачивание всё равно упало бы.
+$githubReleaseUrl = "https://github.com/$githubOwner/$githubRepo/releases/tag/$tag"
+$githubAssetUrl = "https://github.com/$githubOwner/$githubRepo/releases/download/$tag/$zipName"
+$githubDir = Join-Path $release 'github'
+New-Item -ItemType Directory -Path $githubDir -Force | Out-Null
+
+$githubManifest = [ordered]@{
+    schema     = 1
+    channel    = $Channel
+    version    = $Version
+    tag        = $tag
+    releasedAt = $manifest.releasedAt
+    minVersion = $MinVersion
+    notes      = $Notes
+    notesUrl   = $githubReleaseUrl
+    mandatory  = [bool]$Mandatory
+    asset      = [ordered]@{
+        name   = $zipName
+        url    = $githubAssetUrl
+        size   = $zipItem.Length
+        sha256 = $hash
+    }
+}
+$githubManifestPath = Join-Path $githubDir 'update.json'
+Write-JsonFile -Path $githubManifestPath -Json ($githubManifest | ConvertTo-Json -Depth 6)
+Write-Host "Манифест GitHub: $githubManifestPath" -ForegroundColor Green
+
 # Старые клиенты (<= 1.0.16) читают размер из текста релиза. Маркеры оставляем,
 # чтобы они хотя бы корректно показывали размер и не скачивали обрезанный архив.
 $legacyDescription = $notesText + @"
@@ -195,6 +230,19 @@ $legacyDescription = $notesText + @"
 <!-- exitboost-asset-size=$($zipItem.Length) -->
 <!-- exitboost-asset-sha256=$hash -->
 "@
+
+$githubNotesPath = Join-Path $githubDir 'release.md'
+$githubNotesText = $legacyDescription + @"
+
+**Файлы релиза**
+
+- [ExitBoost-$Version-win-x64.zip](https://github.com/$githubOwner/$githubRepo/releases/download/$tag/$zipName)
+- [ExitBoost-$Version-setup.exe](https://github.com/$githubOwner/$githubRepo/releases/download/$tag/ExitBoost-$Version-setup.exe)
+- [ExitBoost.Cli-$Version-win-x64.zip](https://github.com/$githubOwner/$githubRepo/releases/download/$tag/ExitBoost.Cli-$Version-win-x64.zip)
+- [update.json](https://github.com/$githubOwner/$githubRepo/releases/download/$tag/update.json)
+"@
+[System.IO.File]::WriteAllText($githubNotesPath, $githubNotesText, (New-Object System.Text.UTF8Encoding($false)))
+Write-Host "Описание GitHub: $githubNotesPath" -ForegroundColor Green
 
 $releaseLinks = @(
     [ordered]@{ name = 'update.json'; url = "https://gitlab.com/api/v4/projects/$projectId/packages/generic/$packageName/$Version/update.json"; link_type = 'other' },
@@ -240,6 +288,7 @@ Write-Host "  CLI:        publish\ExitBoost.Cli"
 Write-Host "  архив:      $zip"
 Write-Host "  установщик: $(if (Test-Path $setup) { $setup } else { 'не собран' })"
 Write-Host "  манифест:   $manifestPath"
+Write-Host "  GitHub:     $githubManifestPath"
 Write-Host "  SHA-256:    $hash"
 Write-Host "  размер:     $($zipItem.Length) байт"
 Write-Host ''
@@ -251,3 +300,41 @@ foreach ($file in $files) {
 Write-Host ''
 Write-Host "Создание релиза (нужен токен с api):" -ForegroundColor Cyan
 Write-Host "  curl.exe --http1.1 --ssl-no-revoke --fail --request POST --header `"PRIVATE-TOKEN: `$env:GITLAB_API_TOKEN`" --header `"Content-Type: application/json`" --data-binary `"@$releasePath`" https://gitlab.com/api/v4/projects/$projectId/releases"
+
+$ghAssets = @($zip, $githubManifestPath)
+if (Test-Path $setup) { $ghAssets += $setup }
+$ghAssets += $cliZip
+$ghQuoted = ($ghAssets | ForEach-Object { "`"$_`"" }) -join ' '
+
+Write-Host ''
+Write-Host "Зеркало GitHub (gh CLI, аккаунт с правом repo):" -ForegroundColor Cyan
+Write-Host "  gh release create $tag --repo $githubOwner/$githubRepo --title `"ExitBoost $Version`" --notes-file `"$githubNotesPath`" $ghQuoted"
+Write-Host "  # если релиз уже есть:"
+Write-Host "  gh release upload $tag --repo $githubOwner/$githubRepo --clobber $ghQuoted"
+Write-Host "  gh release edit $tag --repo $githubOwner/$githubRepo --title `"ExitBoost $Version`" --notes-file `"$githubNotesPath`""
+
+if ($PublishGitHub) {
+    $gh = Get-Command gh -ErrorAction SilentlyContinue
+    if (-not $gh) { throw 'GitHub CLI (gh) не найден. Установите: winget install GitHub.cli' }
+
+    Write-Host ''
+    Write-Host "Публикация в GitHub..." -ForegroundColor Cyan
+    gh release view $tag --repo "$githubOwner/$githubRepo" *> $null
+    $releaseExists = ($LASTEXITCODE -eq 0)
+
+    if ($releaseExists) {
+        gh release upload $tag --repo "$githubOwner/$githubRepo" --clobber @ghAssets
+        if ($LASTEXITCODE -ne 0) { throw 'Не удалось загрузить файлы в релиз GitHub' }
+
+        gh release edit $tag --repo "$githubOwner/$githubRepo" `
+            --title "ExitBoost $Version" --notes-file $githubNotesPath
+        if ($LASTEXITCODE -ne 0) { throw 'Не удалось обновить описание релиза GitHub' }
+    }
+    else {
+        gh release create $tag --repo "$githubOwner/$githubRepo" `
+            --title "ExitBoost $Version" --notes-file $githubNotesPath @ghAssets
+        if ($LASTEXITCODE -ne 0) { throw 'Не удалось создать релиз GitHub' }
+    }
+
+    Write-Host "GitHub: https://github.com/$githubOwner/$githubRepo/releases/tag/$tag" -ForegroundColor Green
+}

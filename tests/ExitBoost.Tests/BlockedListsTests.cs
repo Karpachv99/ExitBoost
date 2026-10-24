@@ -90,4 +90,51 @@ public class BlockedListsTests
     [Fact]
     public void ReadDomains_возвращает_пусто_для_выключенного_списка() =>
         Assert.Empty(BlockedLists.ReadDomains(BlockedListPreset.Off));
+
+    [Fact]
+    public void SampleFile_берёт_популярные_домены_для_замера()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "exitboost-sample-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "list.txt");
+        try
+        {
+            File.WriteAllLines(path, new[]
+            {
+                "example.com",
+                "steamcommunity.com",
+                "discord.com",
+                "youtube.com",
+                "other.org"
+            });
+
+            var sample = BlockedLists.SampleFile(path, count: 2);
+
+            Assert.Equal(["steamcommunity.com", "discord.com"], sample);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void SampleFile_без_популярных_берёт_первые_домены()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "exitboost-sample-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "list.txt");
+        try
+        {
+            File.WriteAllLines(path, new[] { "one.example", "two.example", "three.example" });
+
+            var sample = BlockedLists.SampleFile(path, count: 2);
+
+            Assert.Equal(["one.example", "two.example"], sample);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
 }

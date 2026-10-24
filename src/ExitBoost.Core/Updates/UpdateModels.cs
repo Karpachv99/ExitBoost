@@ -6,6 +6,9 @@ public enum UpdateSource
     /// <summary>Строгий манифест update.json с размером и SHA-256.</summary>
     Manifest,
 
+    /// <summary>Строгий манифест update.json, полученный с зеркала GitHub.</summary>
+    GitHubManifest,
+
     /// <summary>Старый формат: ZIP-ассет релиза и размер из release notes.</summary>
     LegacyRelease
 }
