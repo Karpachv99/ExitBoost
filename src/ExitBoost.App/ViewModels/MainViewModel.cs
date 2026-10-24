@@ -96,6 +96,8 @@ public sealed class MainViewModel : ObservableObject
         UpdateCheckCommand = new RelayCommand(_ => CheckAppUpdateAsync(manual: true), _ => !IsUpdateBusy);
         UpdateInstallCommand = new RelayCommand(_ => InstallUpdateAsync(), _ => !IsUpdateBusy && _pendingUpdate is not null);
         UpdateOpenPageCommand = new RelayCommand(_ => { OpenReleasePage(); return Task.CompletedTask; }, _ => _pendingUpdate is not null);
+        UpdateCancelCommand = new RelayCommand(() => _updateCts?.Cancel(), () => IsUpdateDownloading);
+        UpdateOpenLogCommand = new RelayCommand(OpenUpdateLog, () => HasUpdateLog);
         CopyLogCommand = new RelayCommand(() =>
         {
             Clipboard.SetText(string.Join(Environment.NewLine, Logs.Select(l => $"{l.Time} [{l.LevelText}] {l.Message}")));
@@ -1874,14 +1876,17 @@ public sealed class MainViewModel : ObservableObject
 
     // ================================================ обновления программы
 
-    /// <summary>Текущая версия программы (сравнивается с тегом релиза на GitHub).</summary>
+    /// <summary>Текущая версия программы.</summary>
     public static string CurrentVersion =>
         (typeof(MainViewModel).Assembly.GetName().Version ?? new Version(1, 0, 0)).ToString(3);
 
     public string CurrentVersionText => "Версия " + CurrentVersion;
 
-    /// <summary>Репозиторий обновлений зашит в программу: всегда официальный GitHub.</summary>
+    /// <summary>Репозиторий обновлений зашит в программу: всегда официальный GitLab.</summary>
     public string UpdateRepo => AppSettings.OfficialUpdateRepo;
+
+    /// <summary>Источник обновлений для отображения.</summary>
+    public string UpdateSourceText => "gitlab.com/" + UpdateRepo;
 
     private bool _checkAppUpdates = true;
     public bool CheckAppUpdatesOnStart
@@ -1913,18 +1918,62 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    private bool _isUpdateDownloading;
+    public bool IsUpdateDownloading
+    {
+        get => _isUpdateDownloading;
+        private set
+        {
+            if (!Set(ref _isUpdateDownloading, value)) return;
+            UpdateCancelCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    private string _updateResultText = "";
+    public string UpdateResultText
+    {
+        get => _updateResultText;
+        private set
+        {
+            if (!Set(ref _updateResultText, value)) return;
+            OnPropertyChanged(nameof(HasUpdateResult));
+        }
+    }
+
+    public bool HasUpdateResult => _updateResultText.Length > 0;
+
+    private string _updateNotesText = "";
+    public string UpdateNotesText
+    {
+        get => _updateNotesText;
+        private set
+        {
+            if (!Set(ref _updateNotesText, value)) return;
+            OnPropertyChanged(nameof(HasUpdateNotes));
+        }
+    }
+
+    public bool HasUpdateNotes => _updateNotesText.Length > 0;
+
+    private string _lastUpdateLogPath = "";
+    public bool HasUpdateLog => _lastUpdateLogPath.Length > 0;
+
     private UpdateInfo? _pendingUpdate;
+    private CancellationTokenSource? _updateCts;
 
     /// <summary>Найдено ли обновление (для показа кнопки «Установить»).</summary>
     public bool IsUpdateAvailable => _pendingUpdate is not null;
 
     public string UpdateAvailableText => _pendingUpdate is null
         ? ""
-        : $"доступна версия {_pendingUpdate.Version} ({_pendingUpdate.SizeText})";
+        : $"доступна версия {_pendingUpdate.Version} ({_pendingUpdate.SizeText})"
+          + (_pendingUpdate.Mandatory ? " · обязательное" : "");
 
     public RelayCommand UpdateCheckCommand { get; }
     public RelayCommand UpdateInstallCommand { get; }
     public RelayCommand UpdateOpenPageCommand { get; }
+    public RelayCommand UpdateCancelCommand { get; }
+    public RelayCommand UpdateOpenLogCommand { get; }
 
     private bool _updateCheckedOnStart;
 
@@ -1933,8 +1982,32 @@ public sealed class MainViewModel : ObservableObject
     {
         if (_updateCheckedOnStart) return;
         _updateCheckedOnStart = true;
+
+        ShowLastUpdateResult();
+
         if (!CheckAppUpdatesOnStart) return;
         await CheckAppUpdateAsync(manual: false).ConfigureAwait(true);
+    }
+
+    private void ShowLastUpdateResult()
+    {
+        var result = UpdateService.ReadAndClearResult();
+        if (result is null) return;
+
+        _lastUpdateLogPath = result.LogPath;
+        OnPropertyChanged(nameof(HasUpdateLog));
+        UpdateOpenLogCommand.RaiseCanExecuteChanged();
+
+        if (result.IsSuccess)
+        {
+            UpdateResultText = $"Обновление {result.Version} установлено.";
+            _log.Info($"Обновление {result.Version} установлено");
+        }
+        else
+        {
+            UpdateResultText = $"Обновление {result.Version} не установлено: {result.Error}";
+            _log.Warn($"Обновление {result.Version} не установлено: {result.Error}");
+        }
     }
 
     private async Task CheckAppUpdateAsync(bool manual)
@@ -1947,9 +2020,7 @@ public sealed class MainViewModel : ObservableObject
             if (manual)
             {
                 MessageBox.Show(
-                    "Укажите репозиторий GitHub с релизами в формате «владелец/имя».\n" +
-                    "Например: ivanov/ExitBoost\n\n" +
-                    "Обновления приходят из раздела Releases этого репозитория.",
+                    "Официальный репозиторий обновлений задан в программе и не должен быть пустым.",
                     "Обновления", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             return;
@@ -1959,22 +2030,40 @@ public sealed class MainViewModel : ObservableObject
         UpdateStatusText = "проверяю обновления…";
         try
         {
-            var info = await UpdateChecker.CheckAsync(owner, repo, CurrentVersion).ConfigureAwait(true);
-            if (info is null)
+            UpdateService.CleanupOldDownloads();
+            var result = await UpdateService.CheckAsync(owner, repo, CurrentVersion).ConfigureAwait(true);
+
+            switch (result.Status)
             {
-                SetPendingUpdate(null);
-                UpdateStatusText = $"обновлений нет — у вас последняя версия {CurrentVersion}";
-                _log.Info($"Обновления: у вас последняя версия {CurrentVersion}");
-                return;
+                case UpdateCheckStatus.UpToDate:
+                    SetPendingUpdate(null);
+                    UpdateStatusText = $"обновлений нет — у вас последняя версия {CurrentVersion}";
+                    _log.Info($"Обновления: у вас последняя версия {CurrentVersion}");
+                    break;
+
+                case UpdateCheckStatus.Available:
+                    var info = result.Update!;
+                    SetPendingUpdate(info);
+                    UpdateStatusText = $"доступна версия {info.Version} ({info.SizeText})"
+                                       + (info.Mandatory ? " · обязательное обновление" : "")
+                                       + (info.Source == UpdateSource.LegacyRelease
+                                           ? " · старый формат релиза, без SHA-256"
+                                           : "");
+                    _log.Info($"Обновления: доступна версия {info.Version} (сейчас {CurrentVersion}), источник: {info.Source}");
+                    break;
+
+                case UpdateCheckStatus.Failed:
+                    SetPendingUpdate(null);
+                    UpdateStatusText = "не удалось проверить обновления: " + result.Error;
+                    _log.Warn("Проверка обновлений не удалась: " + result.Error);
+                    if (manual)
+                    {
+                        MessageBox.Show(
+                            "Не удалось проверить обновления:\n" + result.Error,
+                            "Обновления", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
+                    break;
             }
-
-            SetPendingUpdate(info);
-            UpdateStatusText = $"доступна версия {info.Version} ({info.SizeText})";
-            _log.Info($"Обновления: доступна версия {info.Version} (сейчас {CurrentVersion})");
-
-            // Проверка остаётся тихой: доступная версия показывается в разделе
-            // «Обновления», а решение об установке принимает пользователь кнопкой.
-            UpdateStatusText = $"доступна версия {info.Version} ({info.SizeText}) — установите вручную кнопкой ниже";
         }
         catch (Exception ex)
         {
@@ -1995,37 +2084,68 @@ public sealed class MainViewModel : ObservableObject
     private void SetPendingUpdate(UpdateInfo? info)
     {
         _pendingUpdate = info;
+        UpdateNotesText = info?.Notes ?? "";
         OnPropertyChanged(nameof(IsUpdateAvailable));
         OnPropertyChanged(nameof(UpdateAvailableText));
         UpdateInstallCommand.RaiseCanExecuteChanged();
         UpdateOpenPageCommand.RaiseCanExecuteChanged();
     }
 
-    /// <summary>Скачать архив релиза и перезапустить программу с установкой.</summary>
+    /// <summary>Скачать архив, запустить отдельный updater и закрыть приложение.</summary>
     private async Task InstallUpdateAsync()
     {
         var info = _pendingUpdate;
         if (info is null || IsUpdateBusy) return;
 
-        string zip = Path.Combine(Path.GetTempPath(), "ExitBoost-update.zip");
+        if (!info.HasHash)
+        {
+            var answer = MessageBox.Show(
+                "В этом релизе нет SHA-256. Проверить целостность архива можно только по размеру.\n\n" +
+                "Продолжить установку?",
+                "Обновление", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (answer != MessageBoxResult.Yes) return;
+        }
+
         IsUpdateBusy = true;
+        IsUpdateDownloading = true;
+        _updateCts = new CancellationTokenSource();
+        UpdateStatusText = "подготовка обновления…";
+
         try
         {
-            var progress = new Progress<double>(p =>
-                UpdateStatusText = $"скачивание обновления… {p:P0}");
-            await UpdateInstaller.DownloadAsync(info.AssetUrl, zip, progress,
-                expectedSize: info.AssetSize).ConfigureAwait(true);
+            var progress = new Progress<UpdateProgress>(p => UpdateStatusText = FormatUpdateProgress(p));
+            var downloaded = await UpdateService.DownloadAsync(info, progress, _updateCts.Token)
+                .ConfigureAwait(true);
 
-            UpdateStatusText = "устанавливаю… программа сейчас перезапустится";
-            string dir = UpdateInstaller.InstallDirectory;
+            UpdateStatusText = "проверяю и запускаю установку…";
+            string dir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
             string exe = Environment.ProcessPath ?? Path.Combine(dir, "ExitBoost.exe");
 
-            // Скрипт дождётся выхода процесса, распакует архив и запустит программу заново.
-            UpdateApplier.ScheduleApply(zip, dir, exe, Environment.ProcessId);
-            _log.Info($"Обновление {info.Version}: скачано, перезапускаю программу для установки");
+            var launch = UpdateService.LaunchUpdater(
+                info, downloaded.Path, dir, exe, Environment.ProcessId);
+            _lastUpdateLogPath = launch.LogPath;
+            OnPropertyChanged(nameof(HasUpdateLog));
+            UpdateOpenLogCommand.RaiseCanExecuteChanged();
+
+            _log.Info($"Обновление {info.Version}: архив проверен, запускаю updater");
+            UpdateStatusText = "устанавливаю… программа сейчас перезапустится";
 
             App.ShuttingDown = true;
-            await App.ExitAsync().ConfigureAwait(true);
+            Task exitTask = App.ExitAsync();
+            if (await Task.WhenAny(exitTask, Task.Delay(TimeSpan.FromSeconds(45))).ConfigureAwait(true) != exitTask)
+            {
+                _log.Warn("Выход затянулся — завершаю принудительно, чтобы updater смог заменить файлы");
+                Application.Current?.Shutdown();
+            }
+            else
+            {
+                await exitTask.ConfigureAwait(true);
+            }
+        }
+        catch (OperationCanceledException) when (_updateCts?.IsCancellationRequested == true)
+        {
+            UpdateStatusText = "загрузка обновления отменена";
+            _log.Info("Загрузка обновления отменена пользователем");
         }
         catch (Exception ex)
         {
@@ -2033,18 +2153,54 @@ public sealed class MainViewModel : ObservableObject
             _log.Warn("Обновление не установилось: " + ex.Message);
             MessageBox.Show(
                 "Не удалось установить обновление:\n" + ex.Message + "\n\n" +
-                "Если программа установлена в защищённую папку (например, Program Files), " +
-                "запустите её от имени администратора и повторите обновление.",
+                "Если у вас версия 1.0.16 или старше — один раз установите 1.0.17 вручную " +
+                "со страницы релиза, дальше обновления пойдут автоматически.\n\n" +
+                "Журнал: " + (_lastUpdateLogPath.Length > 0 ? _lastUpdateLogPath : UpdateService.LogsDirectory),
                 "Обновление", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         finally
         {
+            IsUpdateDownloading = false;
             IsUpdateBusy = false;
+            try { _updateCts?.Dispose(); } catch { }
+            _updateCts = null;
         }
     }
 
-    private static string Shorten(string text, int max)
-        => text.Length <= max ? text : text[..max].TrimEnd() + "…";
+    private static string FormatUpdateProgress(UpdateProgress progress)
+    {
+        static string Mb(long bytes) =>
+            (bytes / 1024.0 / 1024.0).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+
+        return progress.Total > 0
+            ? $"{progress.Phase}… {progress.Fraction:P0} ({Mb(progress.Received)} из {Mb(progress.Total)} МБ)"
+            : $"{progress.Phase}… {Mb(progress.Received)} МБ";
+    }
+
+    private void OpenUpdateLog()
+    {
+        string path = _lastUpdateLogPath;
+        if (path.Length == 0) return;
+
+        try
+        {
+            if (File.Exists(path))
+            {
+                Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"")
+                {
+                    UseShellExecute = true
+                });
+            }
+            else
+            {
+                Process.Start(new ProcessStartInfo(UpdateService.LogsDirectory) { UseShellExecute = true });
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Не удалось открыть журнал обновления: " + ex.Message);
+        }
+    }
 
     /// <summary>Открыть страницу релиза в браузере.</summary>
     private void OpenReleasePage()

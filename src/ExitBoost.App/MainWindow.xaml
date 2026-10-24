@@ -360,9 +360,9 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" VerticalAlignment="Center" Style="{StaticResource Muted}"
                                                    TextTrimming="CharacterEllipsis"
-                                                   ToolTip="Обновления всегда скачиваются с официального репозитория программы">
+                                                   ToolTip="Обновления скачиваются только с официального репозитория GitLab и проверяются по SHA-256">
                                             <Run Text="Источник: " />
-                                            <Run Text="{Binding UpdateRepo, Mode=OneWay}" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" />
+                                            <Run Text="{Binding UpdateSourceText, Mode=OneWay}" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" />
                                             <Run Text=" (официальный)" />
                                         </TextBlock>
                                         <Button Grid.Column="1" Content="Проверить обновления" Margin="8,0,0,0"
@@ -378,9 +378,30 @@
                                     <WrapPanel Margin="0,6,0,0" Visibility="{Binding IsUpdateAvailable, Converter={StaticResource BoolToVis}}">
                                         <Button Content="Установить обновление" Style="{StaticResource AccentButton}"
                                                 Command="{Binding UpdateInstallCommand}" Margin="0,0,6,4" />
+                                        <Button Content="Отменить загрузку" Style="{StaticResource LinkButton}"
+                                                Command="{Binding UpdateCancelCommand}" Margin="0,0,6,4"
+                                                Visibility="{Binding IsUpdateDownloading, Converter={StaticResource BoolToVis}}" />
                                         <Button Content="Страница релиза" Style="{StaticResource LinkButton}"
                                                 Command="{Binding UpdateOpenPageCommand}" Margin="0,0,6,4" />
                                     </WrapPanel>
+                                    <Border Background="#1AFFFFFF" CornerRadius="7" Padding="10" Margin="0,8,0,0"
+                                            Visibility="{Binding HasUpdateNotes, Converter={StaticResource BoolToVis}}">
+                                        <StackPanel>
+                                            <TextBlock Style="{StaticResource Muted}" FontWeight="SemiBold" Text="Что нового" />
+                                            <ScrollViewer MaxHeight="150" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0">
+                                                <TextBlock Text="{Binding UpdateNotesText}" TextWrapping="Wrap"
+                                                           Foreground="{StaticResource TextBrush}" />
+                                            </ScrollViewer>
+                                        </StackPanel>
+                                    </Border>
+                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0"
+                                                Visibility="{Binding HasUpdateResult, Converter={StaticResource BoolToVis}}">
+                                        <TextBlock Style="{StaticResource Muted}" VerticalAlignment="Center"
+                                                   TextWrapping="Wrap" Text="{Binding UpdateResultText}" />
+                                        <Button Content="Журнал обновления" Style="{StaticResource LinkButton}"
+                                                Command="{Binding UpdateOpenLogCommand}" Margin="8,0,0,0"
+                                                Visibility="{Binding HasUpdateLog, Converter={StaticResource BoolToVis}}" />
+                                    </StackPanel>
                                 </StackPanel>
                             </Border>
 

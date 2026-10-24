@@ -1,38 +1,28 @@
-using System.Text.Json;
 using System.Net;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace ExitBoost.Core.Updates;
 
-/// <summary>Информация о доступном обновлении.</summary>
-public sealed record UpdateInfo(
-    string Version,
-    string Tag,
-    string PageUrl,
-    string Notes,
-    string AssetName,
-    string AssetUrl,
-    long AssetSize)
-{
-    /// <summary>Размер файла в мегабайтах (для показа пользователю).</summary>
-    public string SizeText => AssetSize <= 0
-        ? "—"
-        : (AssetSize / 1024.0 / 1024.0).ToString("F1", System.Globalization.CultureInfo.InvariantCulture) + " МБ";
-}
-
 /// <summary>
 /// Проверка обновлений через GitLab Releases API.
-/// Пользователь задаёт репозиторий в формате «владелец/имя» в настройках.
+/// Сначала читается строгий манифест update.json; если его нет — используется
+/// старый формат с ZIP-ассетом и размером из release notes.
 /// </summary>
 public static class UpdateChecker
 {
     private static readonly HttpClient Http = CreateHttp();
+    private static readonly Regex LegacySize = new(@"exitboost-asset-size=(\d+)", RegexOptions.Compiled);
+    private static readonly Regex LegacySha = new(@"exitboost-asset-sha256=([0-9a-fA-F]{64})", RegexOptions.Compiled);
 
     private static HttpClient CreateHttp()
     {
         var http = new HttpClient(new SocketsHttpHandler
         {
             AutomaticDecompression = DecompressionMethods.None,
-            PooledConnectionLifetime = TimeSpan.FromMinutes(2)
+            PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+            ConnectTimeout = TimeSpan.FromSeconds(15)
         });
         http.Timeout = TimeSpan.FromSeconds(20);
         http.DefaultRequestHeaders.UserAgent.ParseAdd("ExitBoost/1.0");
@@ -57,12 +47,13 @@ public static class UpdateChecker
             value = value["https://".Length..];
         else if (value.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
             value = value["http://".Length..];
+
         if (value.StartsWith("github.com/", StringComparison.OrdinalIgnoreCase))
             value = value["github.com/".Length..];
         if (value.StartsWith("gitlab.com/", StringComparison.OrdinalIgnoreCase))
             value = value["gitlab.com/".Length..];
 
-        var parts = value.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        string[] parts = value.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length < 2) return false;
 
         owner = parts[0];
@@ -72,92 +63,286 @@ public static class UpdateChecker
         return owner.Length > 0 && repo.Length > 0;
     }
 
-    /// <summary>Проверить наличие новой версии. null — обновлений нет или проверка не удалась.</summary>
-    public static async Task<UpdateInfo?> CheckAsync(
+    /// <summary>
+    /// Проверить наличие новой версии. В отличие от старой реализации,
+    /// ошибка сети/HTTP возвращается как <see cref="UpdateCheckStatus.Failed"/>,
+    /// а не маскируется под «обновлений нет».
+    /// </summary>
+    public static async Task<UpdateCheckResult> CheckAsync(
         string owner,
         string repo,
         string currentVersion,
+        string channel = "stable",
         CancellationToken ct = default)
     {
-        // Используем официальный GitLab API; cache-bust обходит устаревшие ответы прокси.
-        string projectPath = Uri.EscapeDataString($"{owner}/{repo}");
-        string cacheBust = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
-        string url = $"https://gitlab.com/api/v4/projects/{projectPath}/releases/permalink/latest?exitboost={cacheBust}";
-        using var resp = await Http.GetAsync(url, ct).ConfigureAwait(false);
-        if (!resp.IsSuccessStatusCode) return null;
+        if (string.IsNullOrWhiteSpace(owner) || string.IsNullOrWhiteSpace(repo))
+            return UpdateCheckResult.Failed("не задан репозиторий обновлений");
 
-        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
-        var root = doc.RootElement;
-
-        string tag = root.TryGetProperty("tag_name", out var tagEl) ? tagEl.GetString() ?? "" : "";
-        if (tag.Length == 0) return null;
-
-        string version = tag.TrimStart('v', 'V');
-        if (!IsNewer(version, currentVersion)) return null;
-
-        string notes = "";
-        if (root.TryGetProperty("body", out var bodyEl) && bodyEl.ValueKind == JsonValueKind.String)
-            notes = bodyEl.GetString() ?? "";
-
-        string pageUrl = $"https://gitlab.com/{owner}/{repo}/-/releases/{Uri.EscapeDataString(tag)}";
-
-        string assetName = "", assetUrl = "";
-        long assetSize = 0;
-        if (root.TryGetProperty("assets", out var assetsEl)
-            && assetsEl.TryGetProperty("links", out var linksEl)
-            && linksEl.ValueKind == JsonValueKind.Array)
+        try
         {
-            foreach (var asset in linksEl.EnumerateArray())
+            string projectPath = Uri.EscapeDataString($"{owner}/{repo}");
+            string cacheBust = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+            string url = $"https://gitlab.com/api/v4/projects/{projectPath}/releases/permalink/latest?exitboost={cacheBust}";
+
+            using var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
             {
-                string name = asset.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
-                assetUrl = asset.TryGetProperty("url", out var u) ? u.GetString() ?? "" : "";
-                string fileName;
-                try { fileName = Path.GetFileName(new Uri(assetUrl).AbsolutePath); }
-                catch { continue; }
-                if (!fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) continue;
-                // CLI-архив тоже zip — для обновления нужен именно архив программы.
-                if (name.Contains("cli", StringComparison.OrdinalIgnoreCase)
-                    || fileName.Contains("cli", StringComparison.OrdinalIgnoreCase)) continue;
-                assetName = fileName;
-                break;
+                string detail = await ReadErrorAsync(response, ct).ConfigureAwait(false);
+                return UpdateCheckResult.Failed(
+                    $"GitLab вернул {(int)response.StatusCode} {response.ReasonPhrase}{detail}");
             }
-        }
 
-        // GitLab release links do not expose file size. A release note may embed
-        // the expected ZIP size so interrupted downloads are detected exactly.
-        if (root.TryGetProperty("description", out var descriptionEl)
-            && descriptionEl.ValueKind == JsonValueKind.String)
+            string json = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            GitLabRelease? release;
+            try
+            {
+                release = JsonSerializer.Deserialize<GitLabRelease>(json);
+            }
+            catch (JsonException ex)
+            {
+                return UpdateCheckResult.Failed("некорректный ответ GitLab: " + ex.Message);
+            }
+
+            if (release is null || string.IsNullOrWhiteSpace(release.TagName))
+                return UpdateCheckResult.Failed("в ответе GitLab нет тега релиза");
+
+            string tag = release.TagName.Trim();
+            string releaseVersion = UpdateVersion.Normalize(tag);
+            if (!UpdateVersion.IsValid(releaseVersion))
+                return UpdateCheckResult.Failed($"не удалось разобрать версию из тега «{tag}»");
+
+            string pageUrl = $"https://gitlab.com/{owner}/{repo}/-/releases/{Uri.EscapeDataString(tag)}";
+            string notes = release.Description ?? "";
+            var links = release.Assets?.Links ?? new List<GitLabAssetLink>();
+
+            GitLabAssetLink? manifestLink = links.FirstOrDefault(IsManifestLink);
+            if (manifestLink is not null)
+            {
+                var manifestResult = await ReadManifestAsync(
+                    manifestLink.Url, releaseVersion, pageUrl, currentVersion, channel, ct).ConfigureAwait(false);
+                return manifestResult;
+            }
+
+            // Переходный fallback: релиз без манифеста (например, 1.0.16).
+            return BuildLegacyResult(links, releaseVersion, tag, pageUrl, notes, currentVersion);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            var match = System.Text.RegularExpressions.Regex.Match(
-                descriptionEl.GetString() ?? "", "exitboost-asset-size=(\\d+)");
-            if (match.Success) long.TryParse(match.Groups[1].Value, out assetSize);
+            throw;
         }
-
-        if (assetUrl.Length == 0) return null;
-
-        return new UpdateInfo(version, tag, pageUrl, notes, assetName, assetUrl, assetSize);
+        catch (TaskCanceledException)
+        {
+            return UpdateCheckResult.Failed("таймаут проверки обновлений");
+        }
+        catch (HttpRequestException ex)
+        {
+            return UpdateCheckResult.Failed("ошибка сети: " + ex.Message);
+        }
+        catch (Exception ex)
+        {
+            return UpdateCheckResult.Failed("не удалось проверить обновления: " + ex.Message);
+        }
     }
 
-    /// <summary>Сравнение версий «1.2.3» и «1.10.0» (без учёта суффиксов).</summary>
-    public static bool IsNewer(string candidate, string current)
+    private static async Task<UpdateCheckResult> ReadManifestAsync(
+        string manifestUrl,
+        string releaseVersion,
+        string releasePageUrl,
+        string currentVersion,
+        string channel,
+        CancellationToken ct)
     {
-        var a = Parse(candidate);
-        var b = Parse(current);
-        for (int i = 0; i < Math.Max(a.Length, b.Length); i++)
+        if (!Uri.TryCreate(manifestUrl, UriKind.Absolute, out Uri? manifestUri)
+            || !manifestUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            || !(manifestUri.Host.Equals("gitlab.com", StringComparison.OrdinalIgnoreCase)
+                 || manifestUri.Host.EndsWith(".gitlab.com", StringComparison.OrdinalIgnoreCase)))
         {
-            int x = i < a.Length ? a[i] : 0;
-            int y = i < b.Length ? b[i] : 0;
-            if (x != y) return x > y;
+            return UpdateCheckResult.Failed("ссылка на манифест должна вести на https://gitlab.com");
         }
-        return false;
+
+        string url = WithCacheBust(manifestUrl);
+        using var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            string detail = await ReadErrorAsync(response, ct).ConfigureAwait(false);
+            return UpdateCheckResult.Failed(
+                $"не удалось скачать манифест: HTTP {(int)response.StatusCode}{detail}");
+        }
+
+        string json = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        if (!UpdateManifest.TryParse(json, out UpdateManifest manifest, out string parseError))
+            return UpdateCheckResult.Failed("манифест обновления некорректен: " + parseError);
+
+        if (!manifest.Channel.Equals(channel, StringComparison.OrdinalIgnoreCase))
+        {
+            return UpdateCheckResult.Failed(
+                $"последний релиз относится к каналу «{manifest.Channel}», а вы на канале «{channel}»");
+        }
+
+        if (!UpdateVersion.IsNewer(manifest.Version, currentVersion))
+            return UpdateCheckResult.UpToDate();
+
+        bool tooOld = manifest.MinVersion.Length > 0
+                       && UpdateVersion.IsNewer(manifest.MinVersion, currentVersion);
+
+        string pageUrl = Uri.TryCreate(manifest.NotesUrl, UriKind.Absolute, out Uri? notesUri)
+            && notesUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+                ? manifest.NotesUrl
+                : releasePageUrl;
+
+        var info = new UpdateInfo
+        {
+            Version = manifest.Version,
+            Tag = manifest.Tag.Length > 0 ? manifest.Tag : "v" + manifest.Version,
+            PageUrl = pageUrl,
+            Notes = manifest.Notes,
+            AssetName = manifest.Asset!.Name,
+            AssetUrl = manifest.Asset.Url,
+            AssetSize = manifest.Asset.Size,
+            Sha256 = manifest.Asset.Sha256.ToLowerInvariant(),
+            Channel = manifest.Channel.ToLowerInvariant(),
+            Mandatory = manifest.Mandatory || tooOld,
+            MinVersion = manifest.MinVersion,
+            ManifestUrl = manifestUrl,
+            Source = UpdateSource.Manifest
+        };
+
+        // Тег релиза и версия манифеста должны совпадать — иначе легко
+        // опубликовать манифест от другой сборки.
+        if (!UpdateVersion.Normalize(releaseVersion).Equals(UpdateVersion.Normalize(info.Version), StringComparison.Ordinal))
+        {
+            return UpdateCheckResult.Failed(
+                $"версия в манифесте ({info.Version}) не совпадает с тегом релиза ({releaseVersion})");
+        }
+
+        return UpdateCheckResult.Available(info);
     }
 
-    private static int[] Parse(string version)
+    private static UpdateCheckResult BuildLegacyResult(
+        IReadOnlyList<GitLabAssetLink> links,
+        string releaseVersion,
+        string tag,
+        string pageUrl,
+        string notes,
+        string currentVersion)
     {
-        string[] parts = (version ?? "").Split('.', StringSplitOptions.RemoveEmptyEntries);
-        var result = new int[parts.Length];
-        for (int i = 0; i < parts.Length; i++)
-            result[i] = int.TryParse(new string(parts[i].SkipWhile(c => !char.IsDigit(c)).TakeWhile(char.IsDigit).ToArray()), out int v) ? v : 0;
-        return result;
+        if (!UpdateVersion.IsNewer(releaseVersion, currentVersion))
+            return UpdateCheckResult.UpToDate();
+
+        GitLabAssetLink? zipLink = links
+            .Where(IsApplicationZip)
+            .OrderByDescending(ScoreApplicationZip)
+            .FirstOrDefault();
+
+        if (zipLink is null)
+            return UpdateCheckResult.Failed("в релизе нет ZIP-архива приложения");
+
+        if (!Uri.TryCreate(zipLink.Url, UriKind.Absolute, out Uri? uri)
+            || !uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            || !(uri.Host.Equals("gitlab.com", StringComparison.OrdinalIgnoreCase)
+                 || uri.Host.EndsWith(".gitlab.com", StringComparison.OrdinalIgnoreCase)
+                 || uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
+                 || uri.Host.EndsWith(".github.com", StringComparison.OrdinalIgnoreCase)
+                 || uri.Host.EndsWith(".githubusercontent.com", StringComparison.OrdinalIgnoreCase)))
+        {
+            return UpdateCheckResult.Failed("ссылка на архив ведёт на неизвестный хост");
+        }
+
+        string fileName = Path.GetFileName(uri.AbsolutePath);
+        if (fileName.Length == 0) fileName = zipLink.Name;
+
+        long size = 0;
+        Match sizeMatch = LegacySize.Match(notes);
+        if (sizeMatch.Success) long.TryParse(sizeMatch.Groups[1].Value, out size);
+
+        string sha = "";
+        Match shaMatch = LegacySha.Match(notes);
+        if (shaMatch.Success) sha = shaMatch.Groups[1].Value.ToLowerInvariant();
+
+        var info = new UpdateInfo
+        {
+            Version = releaseVersion,
+            Tag = tag,
+            PageUrl = pageUrl,
+            Notes = notes,
+            AssetName = fileName,
+            AssetUrl = zipLink.Url,
+            AssetSize = size,
+            Sha256 = sha,
+            Channel = "stable",
+            ManifestUrl = "",
+            Source = UpdateSource.LegacyRelease
+        };
+        return UpdateCheckResult.Available(info);
+    }
+
+    private static bool IsManifestLink(GitLabAssetLink link)
+    {
+        if (link.Name.Equals("update.json", StringComparison.OrdinalIgnoreCase)) return true;
+        return Uri.TryCreate(link.Url, UriKind.Absolute, out Uri? uri)
+               && uri.AbsolutePath.EndsWith("/update.json", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsApplicationZip(GitLabAssetLink link)
+    {
+        string name = link.Name.Length > 0 ? link.Name : SafeFileName(link.Url);
+        if (!name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) return false;
+        if (name.Contains("cli", StringComparison.OrdinalIgnoreCase)) return false;
+        if (name.Contains("symbols", StringComparison.OrdinalIgnoreCase)) return false;
+        return true;
+    }
+
+    private static int ScoreApplicationZip(GitLabAssetLink link)
+    {
+        string name = link.Name.Length > 0 ? link.Name : SafeFileName(link.Url);
+        int score = 0;
+        if (name.Contains("win-x64", StringComparison.OrdinalIgnoreCase)) score += 10;
+        if (name.StartsWith("ExitBoost", StringComparison.OrdinalIgnoreCase)) score += 5;
+        if (name.Contains("setup", StringComparison.OrdinalIgnoreCase)) score -= 20;
+        return score;
+    }
+
+    private static string SafeFileName(string url)
+    {
+        try { return Path.GetFileName(new Uri(url).AbsolutePath); }
+        catch { return ""; }
+    }
+
+    private static string WithCacheBust(string url)
+        => url + (url.Contains('?') ? "&" : "?") + "exitboost=" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+    private static async Task<string> ReadErrorAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        try
+        {
+            string body = (await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false)).Trim();
+            if (body.Length == 0) return "";
+            if (body.Length > 240) body = body[..240] + "…";
+            return ": " + body.Replace('\n', ' ').Replace('\r', ' ');
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private sealed class GitLabRelease
+    {
+        [JsonPropertyName("tag_name")] public string TagName { get; set; } = "";
+        [JsonPropertyName("name")] public string Name { get; set; } = "";
+        [JsonPropertyName("description")] public string? Description { get; set; }
+        [JsonPropertyName("assets")] public GitLabAssets? Assets { get; set; }
+    }
+
+    private sealed class GitLabAssets
+    {
+        [JsonPropertyName("links")] public List<GitLabAssetLink>? Links { get; set; }
+    }
+
+    private sealed class GitLabAssetLink
+    {
+        [JsonPropertyName("name")] public string Name { get; set; } = "";
+        [JsonPropertyName("url")] public string Url { get; set; } = "";
+        [JsonPropertyName("link_type")] public string LinkType { get; set; } = "other";
     }
 }
