@@ -11,6 +11,7 @@ using ExitBoost.Core;
 using ExitBoost.Core.Configuration;
 using ExitBoost.Core.Diagnostics;
 using ExitBoost.Core.Dpi;
+using ExitBoost.Core.Lists;
 using ExitBoost.Core.Logging;
 using ExitBoost.Core.Models;
 using ExitBoost.Core.Networking;
@@ -128,6 +129,7 @@ public sealed class MainViewModel : ObservableObject
         RefreshProcesses();
         FillDpiStrategies(App.ZapretCatalog);
         VpnReloadFromStore();
+        _ = RefreshBlockedListAsync(force: false);
         DpiEngineStatus = App.Zapret.IsInstalled
             ? $"установлен ({App.Zapret.InstalledVersion?[..Math.Min(8, App.Zapret.InstalledVersion.Length)]})"
             : "не установлен — нажмите «Обновить zapret»";
@@ -312,6 +314,12 @@ public sealed class MainViewModel : ObservableObject
     private string _dpiProgressText = "";
     private DpiStrategyItemViewModel? _selectedDpiStrategy;
 
+    // Готовый список заблокированных сервисов (общий для DPI и VPN).
+    private BlockedListPreset _blockedPreset = BlockedListPreset.Off;
+    private string _blockedListStatus = "готовый список выключен";
+    private BlockedListInfo? _blockedListInfo;
+    private int _blockedListBusy;
+
     private string _dpiActiveText = "Обход DPI выключен";
     private string _dpiActiveColor = "#8C95A6";
 
@@ -386,6 +394,90 @@ public sealed class MainViewModel : ObservableObject
 
     public IEnumerable<string> DpiSelectedTargets => DpiTargetHosts
         .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    // ------------------------------------------- готовый список заблокированных
+
+    /// <summary>
+    /// Выбранный готовый список: 0 — не использовать, 1 — стандартный список
+    /// заблокированных сервисов РФ, 2 — полный реестр РКН.
+    /// </summary>
+    public int BlockedPresetIndex
+    {
+        get => (int)_blockedPreset;
+        set
+        {
+            var preset = value switch
+            {
+                1 => BlockedListPreset.Standard,
+                2 => BlockedListPreset.Full,
+                _ => BlockedListPreset.Off
+            };
+            if (preset == _blockedPreset) return;
+
+            _blockedPreset = preset;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(BlockedPresetHint));
+            _settings.Update(s => s.BlockedListPreset = BlockedLists.ToSetting(preset));
+            _ = RefreshBlockedListAsync(force: false);
+        }
+    }
+
+    /// <summary>Пояснение под переключателем списка.</summary>
+    public string BlockedPresetHint => _blockedPreset switch
+    {
+        BlockedListPreset.Standard =>
+            "Курируемый набор заблокированных в РФ сервисов (itdoginfo/allow-domains, ~1,2 тыс. доменов). " +
+            "Добавляется к вашим доменам и в обход DPI, и в VPN.",
+        BlockedListPreset.Full =>
+            "Полный реестр РКН (~1,7 млн доменов, обновляется еженедельно). Максимальный охват, " +
+            "но VPN в режиме «только выбранные» будет стартовать заметно дольше.",
+        _ => "Свои домены — вручную. Готовый список можно включить в один клик."
+    };
+
+    /// <summary>Состояние локальной копии списка (сколько доменов, когда обновлён).</summary>
+    public string BlockedListStatus
+    {
+        get => _blockedListStatus;
+        private set => Set(ref _blockedListStatus, value);
+    }
+
+    private async Task RefreshBlockedListAsync(bool force)
+    {
+        if (_blockedPreset == BlockedListPreset.Off)
+        {
+            _blockedListInfo = null;
+            BlockedListStatus = "готовый список выключен";
+            return;
+        }
+        if (Interlocked.Exchange(ref _blockedListBusy, 1) == 1) return;
+
+        try
+        {
+            var preset = _blockedPreset;
+            BlockedListStatus = "загрузка готового списка…";
+            var info = await BlockedLists
+                .EnsureAsync(preset, force, message => _log.Info(message))
+                .ConfigureAwait(true);
+
+            if (preset != _blockedPreset) return; // пользователь успел переключить
+
+            _blockedListInfo = info;
+            if (info.Ok)
+            {
+                string updated = info.UpdatedAt is { } at ? $", обновлён {at:dd.MM.yyyy}" : "";
+                string stale = info.Error is null ? "" : $" (сеть недоступна: {info.Error})";
+                BlockedListStatus = $"{BlockedLists.DisplayName(preset)}: {info.Count:N0} доменов{updated}{stale}";
+            }
+            else
+            {
+                BlockedListStatus = $"список недоступен: {info.Error}";
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _blockedListBusy, 0);
+        }
+    }
 
     private void RemoveDpiTarget(object? parameter)
     {
@@ -620,6 +712,7 @@ public sealed class MainViewModel : ObservableObject
         _subnetsText = string.Join(", ", s.SplitSubnets);
         _feedUrl = s.NodesFeedUrl;
         _dpiTargetHosts = s.DpiTargetHosts;
+        _blockedPreset = BlockedLists.Parse(s.BlockedListPreset);
         _dpiTargetPort = s.DpiTargetPort > 0 ? s.DpiTargetPort : 443;
         _dpiApplyOnConnect = s.DpiApplyOnConnect;
         _dpiAutoUpdate = s.DpiAutoUpdate;
@@ -1135,11 +1228,24 @@ public sealed class MainViewModel : ObservableObject
 
     // ------------------------------------------------------------- обход DPI
 
-    private DpiTarget BuildDpiTarget() => new()
+    private DpiTarget BuildDpiTarget()
     {
-        Hosts = DpiTargetHosts,
-        Port = DpiTargetPort
-    };
+        var target = new DpiTarget
+        {
+            Hosts = DpiTargetHosts,
+            Port = DpiTargetPort
+        };
+
+        // Готовый список передаём отдельным файлом: полный реестр РКН
+        // (~1,7 млн строк) не копируется в hostlist.txt.
+        if (_blockedPreset != BlockedListPreset.Off)
+        {
+            string path = BlockedLists.ListPath(_blockedPreset);
+            if (File.Exists(path)) target.ExtraHostListPaths.Add(path);
+        }
+
+        return target;
+    }
 
     private void FillDpiStrategies(ZapretCatalog catalog)
     {
@@ -1290,6 +1396,11 @@ public sealed class MainViewModel : ObservableObject
         if (!target.IsValid)
         {
             DpiProgressText = "Укажите домены через запятую";
+            return;
+        }
+        if (target.HostList.Count == 0)
+        {
+            DpiProgressText = "Для проверки нужен хотя бы один свой домен — готовый список проверяется при применении";
             return;
         }
 
@@ -1775,7 +1886,23 @@ public sealed class MainViewModel : ObservableObject
     /// <summary>Подключение ядра VPN по ключу (без диалогов — для общей кнопки «Подключить»).</summary>
     private async Task<bool> ConnectVpnCoreAsync(VpnKey key)
     {
-        var result = await App.Vpn.ConnectAsync(key, App.VpnStore.Routing).ConfigureAwait(true);
+        // Готовый список добавляем к доменам пользователя, не меняя их в интерфейсе:
+        // выключение переключателя сразу возвращает прежний набор.
+        var routing = App.VpnStore.Routing.Clone();
+        if (_blockedPreset != BlockedListPreset.Off && routing.Mode != "full")
+        {
+            var preset = _blockedPreset;
+            var presetDomains = await Task.Run(() => BlockedLists.ReadDomains(preset)).ConfigureAwait(true);
+            if (presetDomains.Count > 0)
+            {
+                routing.Domains = BlockedLists.Merge(routing.Domains, presetDomains);
+                _log.Info($"VPN: добавлен готовый список «{BlockedLists.DisplayName(preset)}» ({presetDomains.Count:N0} доменов)");
+                if (presetDomains.Count > 200_000)
+                    _log.Warn("Список очень большой — ядро VPN будет стартовать дольше обычного");
+            }
+        }
+
+        var result = await App.Vpn.ConnectAsync(key, routing).ConfigureAwait(true);
         if (!result.Ok)
         {
             VpnStatusText = "ошибка: " + result.Error;

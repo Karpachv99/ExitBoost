@@ -465,6 +465,15 @@
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
+                                    <TextBlock Style="{StaticResource Muted}" Margin="0,10,0,4"
+                                               Text="Готовый список заблокированных сервисов РФ" />
+                                    <ComboBox SelectedIndex="{Binding BlockedPresetIndex, Mode=TwoWay}" MinHeight="34">
+                                        <ComboBoxItem Content="Не использовать" />
+                                        <ComboBoxItem Content="Стандартный список (≈1,2 тыс. доменов)" />
+                                        <ComboBoxItem Content="Полный реестр РКН (≈1,7 млн доменов)" />
+                                    </ComboBox>
+                                    <TextBlock Style="{StaticResource Muted}" Margin="0,4,0,0" TextWrapping="Wrap"
+                                               Text="{Binding BlockedListStatus}" />
                                     <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                         <Ellipse Width="8" Height="8" Fill="{Binding VpnStatusColor, Converter={StaticResource StringToBrush}}"
                                                  VerticalAlignment="Center" Margin="0,0,8,0" />
@@ -592,6 +601,17 @@
                                          </DataTemplate>
                                      </ItemsControl.ItemTemplate>
                                  </ItemsControl>
+                                <TextBlock Style="{StaticResource Muted}" Margin="0,10,0,4"
+                                           Text="Готовый список заблокированных сервисов РФ" />
+                                <ComboBox SelectedIndex="{Binding BlockedPresetIndex, Mode=TwoWay}" MinHeight="34">
+                                    <ComboBoxItem Content="Не использовать" />
+                                    <ComboBoxItem Content="Стандартный список (≈1,2 тыс. доменов)" />
+                                    <ComboBoxItem Content="Полный реестр РКН (≈1,7 млн доменов)" />
+                                </ComboBox>
+                                <TextBlock Style="{StaticResource Muted}" Margin="0,4,0,0" TextWrapping="Wrap"
+                                           Text="{Binding BlockedPresetHint}" />
+                                <TextBlock Style="{StaticResource Muted}" Margin="0,2,0,0" TextWrapping="Wrap"
+                                           Text="{Binding BlockedListStatus}" />
                                 <TextBlock Style="{StaticResource Muted}" Margin="0,6,0,0"
                                            Text="Проверяется TLS-рукопожатие с этими доменами — именно его ломает DPI. Оценка: скорость ответа (отлично ≤ 100 мс, хорошо ≤ 200 мс и т.д.)." />
                             </StackPanel>

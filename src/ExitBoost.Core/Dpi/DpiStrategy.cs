@@ -36,6 +36,12 @@ public sealed class DpiTarget
     /// <summary>TCP-порт для проверки.</summary>
     public int Port { get; set; } = 443;
 
+    /// <summary>
+    /// Дополнительные файлы hostlist (готовый список заблокированных сервисов).
+    /// winws принимает несколько --hostlist и объединяет их.
+    /// </summary>
+    public List<string> ExtraHostListPaths { get; set; } = [];
+
     /// <summary>Разделённые домены.</summary>
     public IReadOnlyList<string> HostList => Hosts
         .Split(new[] { ',', ';', ' ', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
@@ -44,7 +50,7 @@ public sealed class DpiTarget
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .ToList();
 
-    public bool IsValid => HostList.Count > 0;
+    public bool IsValid => HostList.Count > 0 || ExtraHostListPaths.Count > 0;
 }
 
 /// <summary>Результат замера доступности цели.</summary>

@@ -152,6 +152,14 @@ public sealed class ZapretRunner : IDisposable
             $"--hostlist=\"{Escape(hostListPath)}\""
         };
 
+        // Готовый список заблокированных сервисов — отдельным файлом:
+        // полный реестр РКН (~1,7 млн строк) не копируем в hostlist.txt.
+        foreach (string extra in target.ExtraHostListPaths)
+        {
+            if (string.IsNullOrWhiteSpace(extra)) continue;
+            parts.Add($"--hostlist=\"{Escape(extra)}\"");
+        }
+
         // Папка fakes лежит рядом с папкой движка: <install>\zapret-winws -> <install>\fakes.
         string fakesPrefix = string.IsNullOrEmpty(engineDirectory)
             ? ""

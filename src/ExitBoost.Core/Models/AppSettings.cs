@@ -86,6 +86,12 @@ public sealed class AppSettings
     /// <summary>Применять обход DPI автоматически при подключении к ретранслятору.</summary>
     public bool DpiApplyOnConnect { get; set; }
 
+    /// <summary>
+    /// Готовый список заблокированных в РФ ресурсов: "off", "standard" или "full".
+    /// Используется и обходом DPI (hostlist zapret), и VPN (домены sing-box).
+    /// </summary>
+    public string BlockedListPreset { get; set; } = "off";
+
     /// <summary>Запускать движок zapret вместе с приложением (служба).</summary>
     public bool DpiRunAsService { get; set; }
 
