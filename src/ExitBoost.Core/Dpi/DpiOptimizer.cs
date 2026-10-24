@@ -16,7 +16,7 @@ public sealed class DpiOptimizer
     /// <summary>Понятное описание ошибки замера (вместо системных сообщений Windows).</summary>
     private static string FriendlyError(string? error)
     {
-        if (string.IsNullOrEmpty(error)) return error;
+        if (string.IsNullOrEmpty(error)) return "";
 
         // Windows: «Такой узел неизвестен.» (WSAHOST_NOT_FOUND)
         if (error.Contains("узел неизвестен", StringComparison.OrdinalIgnoreCase) ||

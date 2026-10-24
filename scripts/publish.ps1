@@ -319,21 +319,32 @@ if ($PublishGitHub) {
 
     Write-Host ''
     Write-Host "Публикация в GitHub..." -ForegroundColor Cyan
-    gh release view $tag --repo "$githubOwner/$githubRepo" *> $null
-    $releaseExists = ($LASTEXITCODE -eq 0)
 
-    if ($releaseExists) {
-        gh release upload $tag --repo "$githubOwner/$githubRepo" --clobber @ghAssets
-        if ($LASTEXITCODE -ne 0) { throw 'Не удалось загрузить файлы в релиз GitHub' }
+    # В PowerShell 5.1 любой вывод gh в stderr превращается в error record,
+    # а $ErrorActionPreference='Stop' из-за этого обрывает скрипт (например,
+    # когда релиза ещё нет и gh release view пишет "release not found").
+    $previousEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        gh release view $tag --repo "$githubOwner/$githubRepo" *> $null
+        $releaseExists = ($LASTEXITCODE -eq 0)
 
-        gh release edit $tag --repo "$githubOwner/$githubRepo" `
-            --title "ExitBoost $Version" --notes-file $githubNotesPath
-        if ($LASTEXITCODE -ne 0) { throw 'Не удалось обновить описание релиза GitHub' }
+        if ($releaseExists) {
+            gh release upload $tag --repo "$githubOwner/$githubRepo" --clobber @ghAssets
+            if ($LASTEXITCODE -ne 0) { throw 'Не удалось загрузить файлы в релиз GitHub' }
+
+            gh release edit $tag --repo "$githubOwner/$githubRepo" `
+                --title "ExitBoost $Version" --notes-file $githubNotesPath
+            if ($LASTEXITCODE -ne 0) { throw 'Не удалось обновить описание релиза GitHub' }
+        }
+        else {
+            gh release create $tag --repo "$githubOwner/$githubRepo" `
+                --title "ExitBoost $Version" --notes-file $githubNotesPath @ghAssets
+            if ($LASTEXITCODE -ne 0) { throw 'Не удалось создать релиз GitHub' }
+        }
     }
-    else {
-        gh release create $tag --repo "$githubOwner/$githubRepo" `
-            --title "ExitBoost $Version" --notes-file $githubNotesPath @ghAssets
-        if ($LASTEXITCODE -ne 0) { throw 'Не удалось создать релиз GitHub' }
+    finally {
+        $ErrorActionPreference = $previousEap
     }
 
     Write-Host "GitHub: https://github.com/$githubOwner/$githubRepo/releases/tag/$tag" -ForegroundColor Green
