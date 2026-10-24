@@ -14,16 +14,21 @@ public sealed class VpnRoutingConfig
     /// <summary>Имена процессов (.exe), чей трафик уходит через VPN в режиме split.</summary>
     public List<string> Processes { get; set; } = [];
 
+    /// <summary>MTU TUN-адаптера: 1400 подходит для PPPoE, 1500 — для обычного Ethernet.</summary>
+    public int Mtu { get; set; } = 1400;
+
     public VpnRoutingConfig Clone() => new()
     {
         Mode = Mode,
         Domains = [.. Domains],
-        Processes = [.. Processes]
+        Processes = [.. Processes],
+        Mtu = Mtu
     };
 
     public void Normalize()
     {
         Mode = Mode == "full" ? "full" : "split";
+        Mtu = Math.Clamp(Mtu, 1280, 9000);
         Domains = Domains
             .SelectMany(d => d.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             .Where(d => d.Length > 0)
@@ -79,6 +84,9 @@ public sealed class VpnKeyStore
                 Routing.Mode = routingEl.TryGetProperty("mode", out var m) ? m.GetString() ?? "split" : "split";
                 Routing.Domains = GetStringList(routingEl, "domains");
                 Routing.Processes = GetStringList(routingEl, "processes");
+                Routing.Mtu = routingEl.TryGetProperty("mtu", out var mtu) && mtu.TryGetInt32(out var mtuValue)
+                    ? mtuValue
+                    : 1400;
             }
             Routing.Normalize();
         }
@@ -93,25 +101,34 @@ public sealed class VpnKeyStore
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(StoragePath)!);
-            using var writer = new Utf8JsonWriter(File.Create(StoragePath), new JsonWriterOptions { Indented = true });
-            writer.WriteStartObject();
-            writer.WritePropertyName("keys");
-            writer.WriteStartArray();
-            foreach (var key in Keys) SerializeKey(writer, key);
-            writer.WriteEndArray();
-            writer.WritePropertyName("routing");
-            writer.WriteStartObject();
-            writer.WriteString("mode", Routing.Mode);
-            writer.WritePropertyName("domains");
-            writer.WriteStartArray();
-            foreach (var d in Routing.Domains) writer.WriteStringValue(d);
-            writer.WriteEndArray();
-            writer.WritePropertyName("processes");
-            writer.WriteStartArray();
-            foreach (var p in Routing.Processes) writer.WriteStringValue(p);
-            writer.WriteEndArray();
-            writer.WriteEndObject();
-            writer.WriteEndObject();
+            string temp = StoragePath + ".tmp";
+
+            // Пишем во временный файл и подменяем: сбой посреди записи
+            // не должен уничтожить сохранённые ключи.
+            using (var writer = new Utf8JsonWriter(File.Create(temp), new JsonWriterOptions { Indented = true }))
+            {
+                writer.WriteStartObject();
+                writer.WritePropertyName("keys");
+                writer.WriteStartArray();
+                foreach (var key in Keys) SerializeKey(writer, key);
+                writer.WriteEndArray();
+                writer.WritePropertyName("routing");
+                writer.WriteStartObject();
+                writer.WriteString("mode", Routing.Mode);
+                writer.WritePropertyName("domains");
+                writer.WriteStartArray();
+                foreach (var d in Routing.Domains) writer.WriteStringValue(d);
+                writer.WriteEndArray();
+                writer.WritePropertyName("processes");
+                writer.WriteStartArray();
+                foreach (var p in Routing.Processes) writer.WriteStringValue(p);
+                writer.WriteEndArray();
+                writer.WriteNumber("mtu", Routing.Mtu);
+                writer.WriteEndObject();
+                writer.WriteEndObject();
+            }
+
+            File.Move(temp, StoragePath, overwrite: true);
         }
         catch
         {
@@ -146,6 +163,8 @@ public sealed class VpnKeyStore
         S("alpn", key.Alpn);
         S("obfs", key.ObfsType);
         S("obfs_pass", key.ObfsPassword);
+        S("plugin", key.Plugin);
+        if (key.AllowInsecure) w.WriteBoolean("insecure", true);
         S("raw", key.RawLink);
         w.WriteString("addedAt", key.AddedAt);
         w.WriteEndObject();
@@ -194,6 +213,8 @@ public sealed class VpnKeyStore
             Alpn = Get("alpn"),
             ObfsType = Get("obfs"),
             ObfsPassword = Get("obfs_pass"),
+            Plugin = Get("plugin"),
+            AllowInsecure = el.TryGetProperty("insecure", out var ins) && ins.ValueKind == JsonValueKind.True,
             RawLink = Get("raw"),
             AddedAt = el.TryGetProperty("addedAt", out var at) && at.ValueKind == JsonValueKind.String
                 ? DateTime.TryParse(at.GetString(), out var dt) ? dt : DateTime.UtcNow

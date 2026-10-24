@@ -47,6 +47,9 @@ public static class VpnKeyParser
                 VpnProtocol.Hysteria2 => ParseHysteria2(rest),
                 _ => null
             };
+            if (key is not null)
+                key.RawLink = text; // исходная ссылка целиком — с параметрами и именем
+
             if (key is null && reason.Length == 0)
                 reason = "Не удалось разобрать ключ";
             return key;
@@ -147,6 +150,8 @@ public static class VpnKeyParser
             throw new InvalidOperationException($"в ключе неверный порт: {port}");
 
         string type = Param(query, "type") ?? "";
+        if (type.Equals("h2", StringComparison.OrdinalIgnoreCase)) type = "http";
+        type = type.ToLowerInvariant();
         string security = Param(query, "security") ?? "";
         string hostHeader = Param(query, "host") ?? "";
         string sni = Param(query, "sni") ?? "";
@@ -176,12 +181,12 @@ public static class VpnKeyParser
             HostHeader = hostHeader,
             Encryption = Param(query, "encryption") ?? (proto == VpnProtocol.Vless ? "none" : ""),
             Alpn = Param(query, "alpn") ?? "",
+            AllowInsecure = IsTrue(Param(query, "allowInsecure") ?? Param(query, "insecure")),
         };
 
         if (key.Security == "reality" && key.Transport is "ws" or "http") key.Transport = "tcp";
         if (key.Security == "tls" && key.Sni.Length == 0)
             key.Sni = key.HostHeader.Length > 0 ? key.HostHeader : key.Address;
-        key.RawLink = link;
         return key;
     }
 
@@ -224,6 +229,7 @@ public static class VpnKeyParser
 
         string net = GetText("net");
         if (net.Length == 0) net = "tcp";
+        net = net.ToLowerInvariant();
         if (net == "h2") net = "http";
 
         var key = new VpnKey
@@ -233,7 +239,7 @@ public static class VpnKeyParser
             Port = port,
             UserId = GetText("id"),
             Name = string.IsNullOrWhiteSpace(GetText("ps")) ? add : GetText("ps"),
-            Security = GetText("tls") is "tls" or "true" ? "tls" : "none",
+            Security = GetText("tls").ToLowerInvariant() is "tls" or "true" ? "tls" : "none",
             Transport = net,
             Path = GetText("path"),
             HostHeader = string.IsNullOrWhiteSpace(GetText("host")) ? GetText("add") : GetText("host"),
@@ -241,9 +247,9 @@ public static class VpnKeyParser
             Fingerprint = GetText("fp"),
             Encryption = string.IsNullOrWhiteSpace(GetText("scy")) ? "auto" : GetText("scy"),
             AlterId = int.TryParse(GetText("aid"), out var aid) ? aid : 0,
+            AllowInsecure = IsTrue(GetText("allowInsecure")),
         };
         if (key.Security == "tls" && key.Sni.Length == 0) key.Sni = key.HostHeader;
-        key.RawLink = link;
         return key;
     }
 
@@ -253,23 +259,28 @@ public static class VpnKeyParser
     {
         string rest = link["ss://".Length..];
 
-        // отрезаем якорь (имя) и параметры
+        // отрезаем якорь (имя) и параметры (?plugin=…)
         string fragment = "";
         int hash = rest.IndexOf('#');
         if (hash >= 0) { fragment = Uri.UnescapeDataString(rest[(hash + 1)..]).Trim(); rest = rest[..hash]; }
+
+        string query = "";
+        int qmark = rest.IndexOf('?');
+        if (qmark >= 0) { query = rest[(qmark + 1)..]; rest = rest[..qmark]; }
 
         string userinfo, hostport;
         int at = lastUnescapedAt(rest);
         if (at > 0)
         {
-            userinfo = rest[..at];
+            // SIP002: ss://base64(method:password)@host:port — userinfo может быть URL-encoded
+            userinfo = Uri.UnescapeDataString(rest[..at]);
             hostport = rest[(at + 1)..];
         }
         else
         {
-            // весь остаток — base64(method:password@host:port); параметры (?plugin=…) отрезаем
-            int qmark = rest.IndexOf('?');
-            string decoded = DecodeBase64(qmark >= 0 ? rest[..qmark] : rest);
+            // весь остаток — base64(method:password@host:port)
+            if (rest.Contains('%')) rest = Uri.UnescapeDataString(rest);
+            string decoded = DecodeBase64(rest);
             int innerAt = decoded.LastIndexOf('@');
             if (innerAt <= 0)
                 throw new InvalidOperationException("ss-ключ не содержит адреса сервера");
@@ -285,14 +296,30 @@ public static class VpnKeyParser
         if (colon <= 0)
             throw new InvalidOperationException("в ss-ключе нет метода шифрования или пароля");
 
-        int portColon = hostport.LastIndexOf(':');
-        if (portColon <= 0)
-            throw new InvalidOperationException("ss-ключ не содержит порта");
-        string address = hostport[..portColon];
-        if (!int.TryParse(hostport[(portColon + 1)..].Trim('[', ']'), out int port) || port <= 0) port = 443;
+        // адрес/порт с учётом [IPv6]
+        string address;
+        int port;
+        if (hostport.StartsWith('['))
+        {
+            int close = hostport.IndexOf(']');
+            if (close < 0) throw new InvalidOperationException("некорректный IPv6-адрес в ss-ключе");
+            address = hostport[1..close];
+            int colon6 = hostport.IndexOf(':', close + 1);
+            port = colon6 > 0 && int.TryParse(hostport[(colon6 + 1)..], out var p6) ? p6 : 443;
+        }
+        else
+        {
+            int portColon = hostport.LastIndexOf(':');
+            if (portColon <= 0)
+                throw new InvalidOperationException("ss-ключ не содержит порта");
+            address = hostport[..portColon];
+            if (!int.TryParse(hostport[(portColon + 1)..], out port) || port <= 0) port = 443;
+        }
 
         if (string.IsNullOrWhiteSpace(address))
             throw new InvalidOperationException("ss-ключ не содержит адреса сервера");
+        if (port is < 1 or > 65535)
+            throw new InvalidOperationException($"в ключе неверный порт: {port}");
 
         var key = new VpnKey
         {
@@ -302,8 +329,8 @@ public static class VpnKeyParser
             Address = address,
             Port = port,
             Name = fragment.Length == 0 ? address : fragment,
+            Plugin = Param(query, "plugin") ?? "",
         };
-        key.RawLink = link;
         return key;
     }
 
@@ -336,7 +363,15 @@ public static class VpnKeyParser
         int colon = hostport.LastIndexOf(':');
         string address;
         int port;
-        if (colon > 0 && int.TryParse(hostport[(colon + 1)..], out var p))
+        if (hostport.StartsWith('['))
+        {
+            int close = hostport.IndexOf(']');
+            if (close < 0) throw new InvalidOperationException("некорректный IPv6-адрес в ключе");
+            address = hostport[1..close];
+            int colon6 = hostport.IndexOf(':', close + 1);
+            port = colon6 > 0 && int.TryParse(hostport[(colon6 + 1)..], out var p6) ? p6 : 443;
+        }
+        else if (colon > 0 && int.TryParse(hostport[(colon + 1)..], out var p))
         {
             address = hostport[..colon];
             port = p;
@@ -364,13 +399,16 @@ public static class VpnKeyParser
             Sni = sni.Length > 0 ? sni : address,
             ObfsType = Param(query, "obfs") ?? "",
             ObfsPassword = Param(query, "obfs-password") ?? "",
+            AllowInsecure = IsTrue(insecure),
         };
-        key.RawLink = link;
-        _ = insecure;
         return key;
     }
 
     // ---- вспомогательное ----
+
+    private static bool IsTrue(string? value) =>
+        value is not null &&
+        (value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase));
 
     private static int lastUnescapedAt(string s)
     {
@@ -391,7 +429,8 @@ public static class VpnKeyParser
     /// <summary>base64 / base64url, в том числе без дополнения.</summary>
     private static string DecodeBase64(string input)
     {
-        string s = input.Trim().Replace('+', '-').Replace('/', '_');
+        // Приводим base64url к обычному base64 (а не наоборот!).
+        string s = input.Trim().Replace('-', '+').Replace('_', '/');
         switch (s.Length % 4)
         {
             case 2: s += "=="; break;

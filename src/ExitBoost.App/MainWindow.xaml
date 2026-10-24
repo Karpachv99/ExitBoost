@@ -474,6 +474,13 @@
                                     </ComboBox>
                                     <TextBlock Style="{StaticResource Muted}" Margin="0,4,0,0" TextWrapping="Wrap"
                                                Text="{Binding BlockedListStatus}" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                        <TextBlock Style="{StaticResource Muted}" Text="MTU туннеля:"
+                                                   VerticalAlignment="Center" Margin="0,0,8,0" />
+                                        <TextBox Text="{Binding VpnMtuText, UpdateSourceTrigger=LostFocus}"
+                                                 Width="72" MinHeight="30"
+                                                 ToolTip="1400 — для PPPoE, 1500 — для обычного Ethernet (допустимо 1280–9000)" />
+                                    </StackPanel>
                                     <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                         <Ellipse Width="8" Height="8" Fill="{Binding VpnStatusColor, Converter={StaticResource StringToBrush}}"
                                                  VerticalAlignment="Center" Margin="0,0,8,0" />

@@ -18,6 +18,12 @@ public static class SingBoxConfigBuilder
     /// <summary>Порт службы управления (graceful stop).</summary>
     public const int ControlPort = 9097;
 
+    /// <summary>
+    /// До этого размера список доменов дублируется в DNS-правилах (чтобы резолвить
+    /// выбранные сайты через VPN). Больше — весь DNS идёт через VPN без дублирования.
+    /// </summary>
+    public const int MaxDomainsForDnsRules = 20_000;
+
     public static string Build(VpnKey key, VpnRoutingConfig routing, string? logOutput = null)
     {
         routing.Normalize();
@@ -40,11 +46,40 @@ public static class SingBoxConfigBuilder
             w.WriteStartObject();
             w.WritePropertyName("servers");
             w.WriteStartArray();
+
+            // DNS через VPN: иначе провайдер видит запросы и может подменить ответы
+            // для заблокированных доменов (в режиме «весь трафик» — для всех).
+            w.WriteStartObject();
+            w.WriteString("type", "https");
+            w.WriteString("tag", "remote");
+            w.WriteString("server", "1.1.1.1");
+            w.WriteString("detour", VpnOutboundTag);
+            w.WriteEndObject();
+
             w.WriteStartObject();
             w.WriteString("type", "local");
             w.WriteString("tag", "local");
             w.WriteEndObject();
             w.WriteEndArray();
+
+            // Список полного реестра (~1,7 млн) не дублируем в DNS-правилах:
+            // в этом случае весь DNS идёт через VPN.
+            bool remoteDnsForAll = full || routing.Domains.Count > MaxDomainsForDnsRules;
+            if (!remoteDnsForAll && routing.Domains.Count > 0)
+            {
+                w.WritePropertyName("rules");
+                w.WriteStartArray();
+                w.WriteStartObject();
+                w.WriteString("server", "remote");
+                w.WritePropertyName("domain_suffix");
+                w.WriteStartArray();
+                foreach (var d in routing.Domains) w.WriteStringValue(d);
+                w.WriteEndArray();
+                w.WriteEndObject();
+                w.WriteEndArray();
+            }
+
+            w.WriteString("final", remoteDnsForAll ? "remote" : "local");
             w.WriteEndObject();
 
             w.WritePropertyName("inbounds");
@@ -58,7 +93,7 @@ public static class SingBoxConfigBuilder
             w.WriteStartArray();
             w.WriteStringValue("172.19.0.1/30");
             w.WriteEndArray();
-            w.WriteNumber("mtu", 1400);
+            w.WriteNumber("mtu", routing.Mtu);
             w.WriteBoolean("auto_route", true);
             w.WriteBoolean("strict_route", false);
             w.WriteEndObject();
@@ -128,6 +163,7 @@ public static class SingBoxConfigBuilder
 
             w.WriteEndArray();
             w.WriteBoolean("auto_detect_interface", true); // свои пакеты — мимо TUN, иначе цикл
+            w.WriteString("default_domain_resolver", "local"); // адрес VPN-сервера резолвим локально
             w.WriteString("final", full ? VpnOutboundTag : DirectTag);
             w.WriteEndObject();
 
@@ -199,6 +235,7 @@ public static class SingBoxConfigBuilder
             w.WriteStartObject();
             w.WriteBoolean("enabled", true);
             w.WriteString("server_name", key.Sni.Length > 0 ? key.Sni : key.Address);
+            if (key.AllowInsecure) w.WriteBoolean("insecure", true);
             w.WriteEndObject();
 
             if (key.ObfsType.Length > 0)
@@ -242,6 +279,11 @@ public static class SingBoxConfigBuilder
             w.WriteEndArray();
         }
 
+        // Reality в sing-box работает только через uTLS. Если в ключе не указан
+        // отпечаток — берём chrome, иначе ядро падает с «uTLS is required by reality client».
+        string fingerprint = key.Fingerprint;
+        if (fingerprint.Length == 0 && key.Security == "reality") fingerprint = "chrome";
+
         if (key.Security == "reality" && key.PublicKey.Length > 0)
         {
             w.WritePropertyName("reality");
@@ -252,21 +294,24 @@ public static class SingBoxConfigBuilder
             w.WriteEndObject();
         }
 
-        if (key.Fingerprint.Length > 0)
+        if (fingerprint.Length > 0)
         {
             w.WritePropertyName("utls");
             w.WriteStartObject();
             w.WriteBoolean("enabled", true);
-            w.WriteString("fingerprint", key.Fingerprint);
+            w.WriteString("fingerprint", fingerprint);
             w.WriteEndObject();
         }
+
+        if (key.AllowInsecure) w.WriteBoolean("insecure", true);
 
         w.WriteEndObject();
     }
 
     private static void WriteTransport(Utf8JsonWriter w, VpnKey key)
     {
-        string transport = key.Transport == "" ? "tcp" : key.Transport;
+        string transport = key.Transport == "" ? "tcp" : key.Transport.ToLowerInvariant();
+        if (transport == "h2") transport = "http";
         string path = key.Path, host = key.HostHeader.Length > 0 ? key.HostHeader : key.Address;
 
         switch (transport)
@@ -309,6 +354,24 @@ public static class SingBoxConfigBuilder
                     w.WriteStringValue(host);
                     w.WriteEndArray();
                 }
+                w.WriteEndObject();
+                break;
+            }
+            case "httpupgrade":
+            {
+                w.WritePropertyName("transport");
+                w.WriteStartObject();
+                w.WriteString("type", "httpupgrade");
+                w.WriteString("path", path.Length > 0 ? path : "/");
+                if (host.Length > 0) w.WriteString("host", host);
+                w.WriteEndObject();
+                break;
+            }
+            case "quic":
+            {
+                w.WritePropertyName("transport");
+                w.WriteStartObject();
+                w.WriteString("type", "quic");
                 w.WriteEndObject();
                 break;
             }

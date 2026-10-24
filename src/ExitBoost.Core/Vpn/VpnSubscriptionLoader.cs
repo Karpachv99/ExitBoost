@@ -66,7 +66,8 @@ public static class VpnSubscriptionLoader
     /// <summary>base64 / base64url без дополнения, до ~1 МБ.</summary>
     private static string DecodeLoose(string input)
     {
-        string s = input.Trim().Replace('+', '-').Replace('/', '_');
+        // Приводим base64url к обычному base64 (а не наоборот!).
+        string s = input.Trim().Trim('\uFEFF').Replace('-', '+').Replace('_', '/');
         switch (s.Length % 4)
         {
             case 2: s += "=="; break;

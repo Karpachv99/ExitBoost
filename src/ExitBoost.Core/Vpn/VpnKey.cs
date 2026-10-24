@@ -66,14 +66,26 @@ public sealed class VpnKey
     /// <summary>Пароль обфускации Hysteria2.</summary>
     public string ObfsPassword { get; set; } = "";
 
+    /// <summary>Не проверять сертификат сервера (allowInsecure / insecure в ключе).</summary>
+    public bool AllowInsecure { get; set; }
+
+    /// <summary>Плагин Shadowsocks (SIP003), например obfs-local или v2ray-plugin.</summary>
+    public string Plugin { get; set; } = "";
+
     /// <summary>
     /// Почему ключ нельзя использовать с ядром sing-box (пусто — можно использовать).
     /// Например, транспорт xhttp поддерживает только Xray.
     /// </summary>
-    public string? UnsupportedReason =>
-        Transport is "xhttp" or "splithttp" or "httpupgrade" or "splithttp"
-            ? $"транспорт «{Transport}» поддерживается только Xray, ядро sing-box его не умеет"
-            : null;
+    public string? UnsupportedReason => Transport switch
+    {
+        "xhttp" or "splithttp" =>
+            $"транспорт «{Transport}» поддерживается только Xray, ядро sing-box его не умеет",
+        "kcp" =>
+            "транспорт «kcp» (mKCP) ядро sing-box не поддерживает",
+        _ when Plugin.Length > 0 =>
+            $"Shadowsocks с плагином «{Plugin}» не поддерживается: нужен внешний плагин",
+        _ => null
+    };
 
     /// <summary>Исходная ссылка-ключ.</summary>
     public string RawLink { get; set; } = "";

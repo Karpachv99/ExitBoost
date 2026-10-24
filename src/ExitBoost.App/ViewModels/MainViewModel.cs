@@ -1362,16 +1362,32 @@ public sealed class MainViewModel : ObservableObject
     {
         if (SelectedDpiStrategy is null) return;
 
-        var target = BuildDpiTarget();
-        if (!target.IsValid)
-        {
-            DpiProgressText = "Укажите домены через запятую";
-            return;
-        }
-
         IsDpiBusy = true;
         try
         {
+            // Готовый список мог ещё не скачаться — без него применение
+            // молча шло бы только по своим доменам.
+            if (_blockedPreset != BlockedListPreset.Off &&
+                !File.Exists(BlockedLists.ListPath(_blockedPreset)))
+            {
+                DpiProgressText = "загрузка готового списка…";
+                var info = await BlockedLists
+                    .EnsureAsync(_blockedPreset, false, message => _log.Info(message))
+                    .ConfigureAwait(true);
+                if (!info.Ok)
+                {
+                    DpiProgressText = $"Готовый список недоступен: {info.Error}";
+                    return;
+                }
+            }
+
+            var target = BuildDpiTarget();
+            if (!target.IsValid)
+            {
+                DpiProgressText = "Укажите домены через запятую";
+                return;
+            }
+
             bool ok = await App.ZapretRunner.StartAsync(SelectedDpiStrategy.Strategy, target).ConfigureAwait(true);
             DpiProgressText = ok
                 ? $"Применено: {SelectedDpiStrategy.Name}"
@@ -1578,6 +1594,22 @@ public sealed class MainViewModel : ObservableObject
     public IEnumerable<string> VpnSelectedPrograms => VpnProcsText
         .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
+    private string _vpnMtuText = "1400";
+    /// <summary>MTU TUN-адаптера: 1400 — PPPoE, 1500 — обычный Ethernet.</summary>
+    public string VpnMtuText
+    {
+        get => _vpnMtuText;
+        set
+        {
+            if (!Set(ref _vpnMtuText, value)) return;
+            if (int.TryParse(value.Trim(), out int mtu) && mtu is >= 1280 and <= 9000)
+            {
+                App.VpnStore.Routing.Mtu = mtu;
+                App.VpnStore.Save();
+            }
+        }
+    }
+
     public IEnumerable<string> VpnSelectedSites => VpnDomainsText
         .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
@@ -1777,6 +1809,8 @@ public sealed class MainViewModel : ObservableObject
             : string.Join(", ", DefaultVpnDomains);
         VpnProcsText = string.Join(", ", App.VpnStore.Routing.Processes);
         _vpnModeIsFull = App.VpnStore.Routing.Mode == "full"; // без диалога при загрузке
+        _vpnMtuText = App.VpnStore.Routing.Mtu.ToString();
+        OnPropertyChanged(nameof(VpnMtuText));
         OnPropertyChanged(nameof(VpnModeIsFull));
         OnPropertyChanged(nameof(VpnModeIsSplit));
         RefreshVpnStatus();

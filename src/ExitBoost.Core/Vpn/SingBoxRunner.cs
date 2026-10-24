@@ -157,8 +157,8 @@ public sealed class SingBoxRunner
             }
         }
         catch { }
-        return ("https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-windows-amd64.zip",
-                "v1.14.3");
+        return ("https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-windows-amd64.zip",
+                "v1.14.4");
     }
 
     // ------------------------------------------------------------ подключение
@@ -210,11 +210,14 @@ public sealed class SingBoxRunner
             proc.Start();
             lock (_lock) _proc = proc;
 
-            // ядро мгновенно падает при ошибке в конфиге/ключе — даём 3 с и проверяем
-            await Task.Delay(3000, ct).ConfigureAwait(false);
-            if (proc.HasExited)
+            // Ждём, пока ядро поднимет TUN и службу управления: на полном реестре
+            // доменов разбор конфига занимает несколько секунд, фиксированные 3 с
+            // могли вернуть «успех» уже упавшему ядру.
+            bool ready = await WaitForCoreReadyAsync(proc, ct).ConfigureAwait(false);
+            if (!ready)
             {
                 lock (_lock) if (_proc == proc) _proc = null;
+                try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); } catch { }
                 string tail = ReadLogTail();
                 string reason = tail.Contains("actively refused", StringComparison.OrdinalIgnoreCase)
                     || tail.Contains("connection refused", StringComparison.OrdinalIgnoreCase)
@@ -244,12 +247,45 @@ public sealed class SingBoxRunner
         ActiveKey = null;
     }
 
+    /// <summary>Ждём ответа службы управления sing-box — значит, ядро реально запустилось.</summary>
+    private static async Task<bool> WaitForCoreReadyAsync(Process proc, CancellationToken ct)
+    {
+        using var handler = new SocketsHttpHandler { UseProxy = false, ConnectTimeout = TimeSpan.FromMilliseconds(500) };
+        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromMilliseconds(700) };
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            if (proc.HasExited) return false;
+            try
+            {
+                using var resp = await http.GetAsync(
+                    $"http://127.0.0.1:{SingBoxConfigBuilder.ControlPort}/version", ct).ConfigureAwait(false);
+                if (resp.IsSuccessStatusCode) return true;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                // ядро ещё стартует
+            }
+            await Task.Delay(200, ct).ConfigureAwait(false);
+        }
+        return !proc.HasExited;
+    }
+
     private static string? Validate(VpnKey key)
     {
         if (key.Address.Length == 0) return "в ключе нет адреса сервера";
         if (key.Port is < 1 or > 65535) return "в ключе неверный порт";
         if (key.UserId.Length == 0) return "в ключе нет uuid или пароля";
         if (key.UnsupportedReason is not null) return key.UnsupportedReason;
+        if (key.Security == "reality" && key.PublicKey.Length == 0)
+            return "в Reality-ключе нет публичного ключа (pbk) — без него ядро не подключится";
+        if (key.Transport == "quic" && key.Security is not ("tls" or "reality"))
+            return "транспорт quic работает только поверх TLS — в ключе нет security=tls";
         return null;
     }
 
@@ -274,12 +310,14 @@ public sealed class SingBoxRunner
 
         Log?.Invoke("остановка VPN по ключу…");
 
+        bool softStop = false;
         try
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
             using var body = new StringContent("", System.Text.Encoding.UTF8, "application/json");
-            await http.PostAsync($"http://127.0.0.1:{SingBoxConfigBuilder.ControlPort}/shutdown", body)
+            using var response = await http.PostAsync($"http://127.0.0.1:{SingBoxConfigBuilder.ControlPort}/shutdown", body)
                 .ConfigureAwait(false);
+            softStop = response.IsSuccessStatusCode;
         }
         catch { /* тихо уходим на жёсткий останов */ }
 
@@ -287,7 +325,9 @@ public sealed class SingBoxRunner
         {
             try
             {
-                if (!proc.HasExited && !proc.WaitForExit(5000))
+                // /shutdown поддерживают не все версии sing-box (в 1.14 — 404).
+                // Если мягкий останов недоступен, не ждём 5 секунд впустую.
+                if (!proc.HasExited && !proc.WaitForExit(softStop ? 5000 : 0))
                     proc.Kill(entireProcessTree: true);
                 proc.Dispose();
             }

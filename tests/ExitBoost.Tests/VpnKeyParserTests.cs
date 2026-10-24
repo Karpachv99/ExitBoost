@@ -242,4 +242,262 @@ public class VpnKeyParserTests
         // в режиме «весь трафик» селектирующих правил быть не должно
         Assert.DoesNotContain("\"domain_suffix\"", json);
     }
+
+    [Fact]
+    public void Reality_Without_Fingerprint_Gets_Default_Utls()
+    {
+        // В ключе нет fp — sing-box требует uTLS для Reality, иначе падает при старте.
+        var link = "vless://uuid-a@1.2.3.4:443?encryption=none&security=reality&sni=www.google.com&pbk=ABC123&sid=bb12#R";
+        var key = VpnKeyParser.Parse(link, out var reason);
+
+        Assert.True(key is not null, reason);
+        Assert.Equal("", key!.Fingerprint);
+
+        string json = SingBoxConfigBuilder.Build(key, new VpnRoutingConfig());
+        Assert.Contains("\"utls\"", json);
+        Assert.Contains("\"fingerprint\": \"chrome\"", json);
+        Assert.Contains("\"reality\"", json);
+    }
+
+    [Fact]
+    public void Reality_Fingerprint_From_Key_Is_Kept()
+    {
+        var link = "vless://uuid-a@1.2.3.4:443?security=reality&sni=a.example&fp=firefox&pbk=ABC#R";
+        var key = VpnKeyParser.Parse(link, out var reason);
+
+        Assert.True(key is not null, reason);
+        string json = SingBoxConfigBuilder.Build(key!, new VpnRoutingConfig());
+        Assert.Contains("\"fingerprint\": \"firefox\"", json);
+        Assert.DoesNotContain("\"fingerprint\": \"chrome\"", json);
+    }
+
+    [Fact]
+    public void AllowInsecure_Is_Parsed_And_Written()
+    {
+        var link = "trojan://pass@example.com:443?sni=example.com&allowInsecure=1#T";
+        var key = VpnKeyParser.Parse(link, out var reason);
+
+        Assert.True(key is not null, reason);
+        Assert.True(key!.AllowInsecure);
+
+        string json = SingBoxConfigBuilder.Build(key, new VpnRoutingConfig());
+        Assert.Contains("\"insecure\": true", json);
+    }
+
+    [Fact]
+    public void Hysteria2_Insecure_Is_Parsed_And_Written()
+    {
+        var link = "hysteria2://pass@example.com:443/?sni=example.com&insecure=true#H";
+        var key = VpnKeyParser.Parse(link, out var reason);
+
+        Assert.True(key is not null, reason);
+        Assert.True(key!.AllowInsecure);
+
+        string json = SingBoxConfigBuilder.Build(key, new VpnRoutingConfig());
+        Assert.Contains("\"insecure\": true", json);
+    }
+
+    [Fact]
+    public void Shadowsocks_UrlEncoded_Base64_Userinfo()
+    {
+        // SIP002: base64(method:password) в userinfo, знак '=' закодирован как %3D
+        string userinfo = Convert.ToBase64String(Encoding.UTF8.GetBytes("aes-256-gcm:pa%ss")).Replace("=", "%3D");
+        var link = $"ss://{userinfo}@1.2.3.4:8388#SS";
+
+        var key = VpnKeyParser.Parse(link, out var reason);
+
+        Assert.True(key is not null, reason);
+        Assert.Equal("aes-256-gcm", key!.Method);
+        Assert.Equal("pa%ss", key.UserId);
+        Assert.Equal("1.2.3.4", key.Address);
+        Assert.Equal(8388, key.Port);
+    }
+
+    [Fact]
+    public void Shadowsocks_Ipv6_Address()
+    {
+        var payload = Convert.ToBase64String(Encoding.UTF8.GetBytes("aes-256-gcm:pass@[2001:db8::1]:8388"));
+        var link = $"ss://{payload}#v6";
+
+        var key = VpnKeyParser.Parse(link, out var reason);
+
+        Assert.True(key is not null, reason);
+        Assert.Equal("2001:db8::1", key!.Address);
+        Assert.Equal(8388, key.Port);
+    }
+
+    [Fact]
+    public void Shadowsocks_With_Plugin_Is_Marked_Unsupported()
+    {
+        var payload = Convert.ToBase64String(Encoding.UTF8.GetBytes("aes-256-gcm:pass@1.2.3.4:8388"));
+        var link = $"ss://{payload}?plugin=obfs-local%3Bobfs%3Dhttp#p";
+
+        var key = VpnKeyParser.Parse(link, out var reason);
+
+        Assert.True(key is not null, reason);
+        Assert.Equal("obfs-local;obfs=http", key!.Plugin);
+        Assert.NotNull(key.UnsupportedReason);
+        Assert.Contains("плагин", key.UnsupportedReason!);
+    }
+
+    [Theory]
+    [InlineData("kcp")]
+    [InlineData("xhttp")]
+    [InlineData("splithttp")]
+    public void Unsupported_Transports_Are_Reported(string transport)
+    {
+        var link = $"vless://uuid-a@1.2.3.4:443?security=tls&type={transport}#T";
+        var key = VpnKeyParser.Parse(link, out var reason);
+
+        Assert.True(key is not null, reason);
+        Assert.NotNull(key!.UnsupportedReason);
+        Assert.Contains(transport, key.UnsupportedReason!);
+    }
+
+    [Fact]
+    public void HttpUpgrade_And_Quic_Are_Written_As_Transports()
+    {
+        var upgrade = VpnKeyParser.Parse(
+            "vless://uuid-a@1.2.3.4:443?security=tls&type=httpupgrade&path=%2Fup&host=cdn.example#U",
+            out var reason1);
+        Assert.True(upgrade is not null, reason1);
+        string json1 = SingBoxConfigBuilder.Build(upgrade!, new VpnRoutingConfig());
+        Assert.Contains("\"type\": \"httpupgrade\"", json1);
+        Assert.Contains("/up", json1);
+
+        var quic = VpnKeyParser.Parse(
+            "vless://uuid-a@1.2.3.4:443?security=tls&type=quic#Q",
+            out var reason2);
+        Assert.True(quic is not null, reason2);
+        string json2 = SingBoxConfigBuilder.Build(quic!, new VpnRoutingConfig());
+        Assert.Contains("\"type\": \"quic\"", json2);
+    }
+
+    [Fact]
+    public void H2_Transport_Is_Mapped_To_Http()
+    {
+        var link = "vless://uuid-a@1.2.3.4:443?security=tls&type=h2&path=%2Fh2&host=a.example#H2";
+        var key = VpnKeyParser.Parse(link, out var reason);
+
+        Assert.True(key is not null, reason);
+        Assert.Equal("http", key!.Transport);
+
+        string json = SingBoxConfigBuilder.Build(key, new VpnRoutingConfig());
+        Assert.Contains("\"type\": \"http\"", json);
+    }
+
+    [Fact]
+    public void RawLink_Keeps_Query_And_Fragment()
+    {
+        var link = "vless://uuid-a@1.2.3.4:443?security=tls&sni=a.example&type=ws&path=%2Fws#My%20Node";
+        var key = VpnKeyParser.Parse(link, out var reason);
+
+        Assert.True(key is not null, reason);
+        Assert.Equal(link, key!.RawLink);
+    }
+
+    [Fact]
+    public void Routing_Mtu_Is_Clamped_And_Written()
+    {
+        var key = new VpnKey
+        {
+            Protocol = VpnProtocol.Shadowsocks,
+            Address = "1.2.3.4",
+            Port = 8388,
+            UserId = "pass",
+            Method = "aes-256-gcm"
+        };
+
+        var routing = new VpnRoutingConfig { Mtu = 1500 };
+        string json = SingBoxConfigBuilder.Build(key, routing);
+        Assert.Contains("\"mtu\": 1500", json);
+
+        routing.Mtu = 100;
+        routing.Normalize();
+        Assert.Equal(1280, routing.Mtu);
+    }
+
+    [Fact]
+    public void Config_Split_Resolves_Selected_Domains_Through_Vpn_Dns()
+    {
+        var key = new VpnKey
+        {
+            Protocol = VpnProtocol.Vless,
+            Address = "vpn.example.com",
+            Port = 443,
+            UserId = "uuid",
+            Security = "tls",
+            Sni = "vpn.example.com"
+        };
+        var routing = new VpnRoutingConfig { Mode = "split", Domains = ["youtube.com", "discord.com"] };
+
+        string json = SingBoxConfigBuilder.Build(key, routing);
+
+        Assert.Contains("\"type\": \"https\"", json);
+        Assert.Contains("\"tag\": \"remote\"", json);
+        Assert.Contains("\"server\": \"1.1.1.1\"", json);
+        Assert.Contains("\"detour\": \"vpn\"", json);
+        Assert.Contains("\"default_domain_resolver\": \"local\"", json);
+        Assert.Contains("\"final\": \"local\"", json); // остальной DNS — локальный
+        Assert.Contains("youtube.com", json);
+    }
+
+    [Fact]
+    public void Config_Full_Sends_All_Dns_Through_Vpn()
+    {
+        var key = new VpnKey
+        {
+            Protocol = VpnProtocol.Shadowsocks,
+            Address = "1.2.3.4",
+            Port = 8388,
+            UserId = "pass",
+            Method = "aes-256-gcm"
+        };
+
+        string json = SingBoxConfigBuilder.Build(key, new VpnRoutingConfig { Mode = "full" });
+
+        Assert.Contains("\"final\": \"remote\"", json);
+        Assert.Contains("\"default_domain_resolver\": \"local\"", json);
+    }
+
+    [Fact]
+    public void Shadowsocks_Base64_With_Slash_Is_Decoded()
+    {
+        // base64 содержит '/': раньше он заменялся на '_' и Convert.FromBase64String падал.
+        string plain = "aes-256-gcm:p??ss@1.2.3.4:8388";
+        string payload = Convert.ToBase64String(Encoding.UTF8.GetBytes(plain));
+        Assert.Contains('/', payload);
+
+        var key = VpnKeyParser.Parse($"ss://{payload}#x", out var reason);
+
+        Assert.True(key is not null, reason);
+        Assert.Equal("aes-256-gcm", key!.Method);
+        Assert.Equal("p??ss", key.UserId);
+    }
+
+    [Fact]
+    public void Shadowsocks_Base64_With_Plus_Is_Decoded()
+    {
+        string plain = "aes-256-gcm:~~~~@1.2.3.4:8388";
+        string payload = Convert.ToBase64String(Encoding.UTF8.GetBytes(plain));
+        Assert.Contains('+', payload);
+
+        var key = VpnKeyParser.Parse($"ss://{payload}#x", out var reason);
+
+        Assert.True(key is not null, reason);
+        Assert.Equal("~~~~", key!.UserId);
+    }
+
+    [Fact]
+    public void Vmess_Boolean_Tls_And_UpperCase_H2()
+    {
+        var json = """{"v":"2","ps":"VM","add":"1.2.3.4","port":"443","id":"uuid","aid":"0","net":"H2","tls":true,"host":"a.example","path":"/"}""";
+        var link = "vmess://" + Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
+
+        var key = VpnKeyParser.Parse(link, out var reason);
+
+        Assert.True(key is not null, reason);
+        Assert.Equal("tls", key!.Security);
+        Assert.Equal("http", key.Transport);
+    }
 }
