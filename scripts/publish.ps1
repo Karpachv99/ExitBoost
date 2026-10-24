@@ -176,8 +176,16 @@ $manifest = [ordered]@{
     }
 }
 
+# GitLab API и System.Text.Json не принимают UTF-8 BOM, поэтому пишем файлы
+# через UTF8Encoding($false): Set-Content -Encoding utf8 в PowerShell 5.1
+# добавляет BOM и ломает и манифест, и тело релиза.
+function Write-JsonFile {
+    param([string]$Path, [string]$Json)
+    [System.IO.File]::WriteAllText($Path, $Json, (New-Object System.Text.UTF8Encoding($false)))
+}
+
 $manifestPath = Join-Path $release 'update.json'
-$manifest | ConvertTo-Json -Depth 6 | Set-Content -Path $manifestPath -Encoding utf8
+Write-JsonFile -Path $manifestPath -Json ($manifest | ConvertTo-Json -Depth 6)
 Write-Host "Манифест: $manifestPath" -ForegroundColor Green
 
 # Старые клиенты (<= 1.0.16) читают размер из текста релиза. Маркеры оставляем,
@@ -214,7 +222,7 @@ $releaseBody = [ordered]@{
     assets      = [ordered]@{ links = $releaseLinks }
 }
 $releasePath = Join-Path $release 'release.json'
-$releaseBody | ConvertTo-Json -Depth 8 | Set-Content -Path $releasePath -Encoding utf8
+Write-JsonFile -Path $releasePath -Json ($releaseBody | ConvertTo-Json -Depth 8)
 Write-Host "Описание релиза: $releasePath" -ForegroundColor Green
 
 # --- итог -------------------------------------------------------------------
