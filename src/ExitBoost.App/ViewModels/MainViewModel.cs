@@ -1365,10 +1365,20 @@ public sealed class MainViewModel : ObservableObject
         try
         {
             DpiProgressText = "Замер без обхода...";
-            var baseline = await App.DpiOptimizer.MeasureBaselineAsync(target).ConfigureAwait(true);
-            DpiBaselineText = baseline.Ok
-                ? $"{baseline.TlsMs:F0} мс (TLS установлен)"
-                : $"не работает: {baseline.Error}";
+            var probes = await App.DpiOptimizer
+                .MeasureBaselineAsync(target.ProbeHostList, target.Port)
+                .ConfigureAwait(true);
+            var blocked = DpiOptimizer.SelectBlockedHosts(probes);
+            DpiBaselineText = DescribeBaseline(probes);
+
+            // Если всё открывается и так, перебирать нечего: любая «успешная»
+            // стратегия была бы случайностью, а не обходом.
+            if (blocked.Count == 0)
+            {
+                DpiBestText = "Домены открываются без обхода — автоподбор не требуется";
+                DpiProgressText = "Перебор не нужен";
+                return;
+            }
 
             FillDpiStrategies(App.ZapretCatalog);
 
@@ -1379,9 +1389,9 @@ public sealed class MainViewModel : ObservableObject
                 DpiProgressText = $"Проверено: {r.Strategy.Name} — {r.ResultText}";
             });
 
-            DpiProgressText = "Перебор стратегий zapret...";
+            DpiProgressText = $"Перебор стратегий zapret (заблокировано: {blocked.Count})...";
             var results = await App.DpiOptimizer
-                .OptimizeAsync(App.ZapretCatalog.Strategies, target, 2, progress)
+                .OptimizeAsync(App.ZapretCatalog.Strategies, target, 2, progress, hosts: blocked)
                 .ConfigureAwait(true);
 
             foreach (var r in results)
@@ -1463,20 +1473,42 @@ public sealed class MainViewModel : ObservableObject
         IsDpiBusy = true;
         try
         {
-            DpiProgressText = "Проверка текущего состояния...";
-            var baseline = await App.DpiOptimizer.MeasureBaselineAsync(target).ConfigureAwait(true);
-            DpiBaselineText = baseline.Ok
-                ? $"{baseline.TlsMs:F0} мс (TLS установлен)"
-                : $"не работает: {baseline.Error}";
+            bool wasRunning = App.ZapretRunner.IsRunning;
 
-            if (App.ZapretRunner.IsRunning && SelectedDpiStrategy is not null)
+            DpiProgressText = "Проверка текущего состояния...";
+            var probes = await App.DpiOptimizer
+                .MeasureBaselineAsync(target.ProbeHostList, target.Port)
+                .ConfigureAwait(true);
+            var blocked = DpiOptimizer.SelectBlockedHosts(probes);
+            DpiBaselineText = DescribeBaseline(probes);
+
+            if (blocked.Count == 0)
             {
-                var withBypass = await DpiProbe
-                    .MeasureAsync(target.ProbeHostList.First(), target.Port)
+                DpiBestText = "Домены открываются без обхода — обход не требуется";
+                DpiProgressText = "Проверка завершена";
+                return;
+            }
+
+            if (wasRunning && SelectedDpiStrategy is not null)
+            {
+                // Замер baseline остановил движок — поднимаем стратегию заново,
+                // иначе «с обходом» мерилось бы уже без обхода.
+                bool started = await App.ZapretRunner
+                    .StartAsync(SelectedDpiStrategy.Strategy, target)
                     .ConfigureAwait(true);
-                DpiBestText = withBypass.Ok
-                    ? $"{withBypass.TlsMs:F0} мс с обходом ({SelectedDpiStrategy.Name})"
-                    : $"с обходом не работает: {withBypass.Error}";
+                if (!started)
+                {
+                    DpiBestText = "не удалось запустить обход";
+                }
+                else
+                {
+                    var withBypass = await DpiProbe
+                        .MeasureAsync(blocked[0], target.Port)
+                        .ConfigureAwait(true);
+                    DpiBestText = withBypass.Ok
+                        ? $"{withBypass.TlsMs:F0} мс с обходом ({SelectedDpiStrategy.Name})"
+                        : $"с обходом не работает: {withBypass.Error}";
+                }
             }
             DpiProgressText = "Проверка завершена";
         }
@@ -1484,6 +1516,20 @@ public sealed class MainViewModel : ObservableObject
         {
             IsDpiBusy = false;
         }
+    }
+
+    /// <summary>Понятное описание базового замера: что заблокировано, что открыто.</summary>
+    private static string DescribeBaseline(IReadOnlyList<DpiHostProbe> probes)
+    {
+        var blocked = probes.Where(p => !p.Ok).Select(p => p.Host).ToList();
+        if (blocked.Count == 0)
+            return probes.Count == 0
+                ? "нет доменов для замера"
+                : $"все домены открываются без обхода ({probes.Count})";
+
+        var open = probes.Where(p => p.Ok).Select(p => p.Host).ToList();
+        string openText = open.Count > 0 ? $" · открываются: {string.Join(", ", open)}" : "";
+        return $"заблокировано {blocked.Count} из {probes.Count}: {string.Join(", ", blocked)}{openText}";
     }
 
     // ================================================== VPN по ключу (sing-box)

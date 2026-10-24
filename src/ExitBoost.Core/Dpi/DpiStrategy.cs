@@ -75,6 +75,17 @@ public sealed record DpiProbeResult(
     public static DpiProbeResult Failed(string error) => new(false, 0, false, 0, error);
 }
 
+/// <summary>
+/// Результат замера одного домена. Нужен, чтобы отличить реально
+/// заблокированные домены от тех, что открываются без обхода.
+/// </summary>
+public sealed record DpiHostProbe(
+    string Host,
+    bool Ok,
+    double TcpMs,
+    double TlsMs,
+    string? Error);
+
 /// <summary>Результат проверки стратегии.</summary>
 public sealed record DpiStrategyResult(
     DpiStrategy Strategy,

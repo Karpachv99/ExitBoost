@@ -35,50 +35,86 @@ public sealed class DpiOptimizer
         return error;
     }
 
-    /// <summary>Замер без обхода — базовая линия.</summary>
+    /// <summary>Замер без обхода по первому домену (CLI и быстрая проверка).</summary>
     public async Task<DpiProbeResult> MeasureBaselineAsync(DpiTarget target, int attempts = 2, CancellationToken ct = default)
     {
-        await _runner.StopAsync().ConfigureAwait(false);
-
         var host = target.ProbeHostList.FirstOrDefault();
         if (host is null) return DpiProbeResult.Failed("не указаны домены");
 
-        int ok = 0;
-        double tlsSum = 0, tcpSum = 0;
-        string? error = null;
-
-        for (int i = 0; i < attempts; i++)
-        {
-            ct.ThrowIfCancellationRequested();
-            var probe = await DpiProbe.MeasureAsync(host, target.Port, ct: ct).ConfigureAwait(false);
-            if (probe.Ok)
-            {
-                ok++;
-                tlsSum += probe.TlsMs;
-                tcpSum += probe.TcpMs;
-            }
-            else
-            {
-                error ??= probe.Error;
-            }
-        }
-
-        return new DpiProbeResult(ok > 0, ok > 0 ? tcpSum / ok : 0, ok > 0, ok > 0 ? tlsSum / ok : 0, error);
+        var probes = await MeasureBaselineAsync([host], target.Port, attempts, ct).ConfigureAwait(false);
+        var probe = probes[0];
+        return new DpiProbeResult(probe.Ok, probe.TcpMs, probe.Ok, probe.TlsMs, probe.Error);
     }
 
     /// <summary>
+    /// Замер без обхода по нескольким доменам: показывает, какие из них
+    /// действительно блокируются. Движок на время замера останавливается.
+    /// </summary>
+    public async Task<IReadOnlyList<DpiHostProbe>> MeasureBaselineAsync(
+        IReadOnlyList<string> hosts,
+        int port = 443,
+        int attempts = 2,
+        CancellationToken ct = default)
+    {
+        await _runner.StopAsync().ConfigureAwait(false);
+
+        var results = new List<DpiHostProbe>();
+        foreach (string host in hosts
+                     .Where(h => !string.IsNullOrWhiteSpace(h))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            bool ok = false;
+            double tcpMs = 0, tlsMs = 0;
+            string? error = null;
+
+            for (int i = 0; i < Math.Max(1, attempts); i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                var probe = await DpiProbe.MeasureAsync(host, port, ct: ct).ConfigureAwait(false);
+                if (probe.Ok)
+                {
+                    ok = true;
+                    tcpMs = probe.TcpMs;
+                    tlsMs = probe.TlsMs;
+                    break;
+                }
+                error = probe.Error;
+            }
+
+            results.Add(new DpiHostProbe(host, ok, ok ? tcpMs : 0, ok ? tlsMs : 0, ok ? null : error));
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Домены, которые не открываются без обхода. Именно их должна поднять
+    /// стратегия: если домен и так работает, он ничего не проверяет.
+    /// </summary>
+    public static IReadOnlyList<string> SelectBlockedHosts(IEnumerable<DpiHostProbe> probes) =>
+        probes.Where(p => !p.Ok).Select(p => p.Host).ToList();
+
+    /// <summary>
     /// Перебрать стратегии и вернуть отсортированный по качеству список.
+    /// Стратегия считается рабочей, только если подняла все переданные домены:
+    /// проверка по одному домену давала случайный результат, когда он и так
+    /// открывался без обхода.
     /// </summary>
     public async Task<IReadOnlyList<DpiStrategyResult>> OptimizeAsync(
         IReadOnlyList<DpiStrategy> strategies,
         DpiTarget target,
         int attempts = 3,
         IProgress<DpiStrategyResult>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IReadOnlyList<string>? hosts = null)
     {
         var results = new List<DpiStrategyResult>();
-        var host = target.ProbeHostList.FirstOrDefault();
-        if (host is null) return results;
+
+        var probeHosts = (hosts ?? target.ProbeHostList)
+            .Where(h => !string.IsNullOrWhiteSpace(h))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (probeHosts.Count == 0) return results;
 
         foreach (var strategy in strategies)
         {
@@ -92,41 +128,49 @@ public sealed class DpiOptimizer
                 string reason = string.IsNullOrEmpty(tail)
                     ? "движок не запустился"
                     : $"движок не запустился: {tail}";
-                var failed = new DpiStrategyResult(strategy, false, 0, 0, 0, attempts, reason);
+                var failed = new DpiStrategyResult(strategy, false, 0, 0, 0, probeHosts.Count, reason);
                 results.Add(failed);
                 progress?.Report(failed);
                 continue;
             }
 
-            int ok = 0;
+            int hostsOk = 0;
             double tlsSum = 0, tcpSum = 0;
             string? error = null;
 
-            for (int i = 0; i < attempts; i++)
+            foreach (string host in probeHosts)
             {
-                ct.ThrowIfCancellationRequested();
-                var probe = await DpiProbe.MeasureAsync(host, target.Port, ct: ct).ConfigureAwait(false);
-                if (probe.Ok)
+                bool hostOk = false;
+                for (int i = 0; i < Math.Max(1, attempts); i++)
                 {
-                    ok++;
-                    tlsSum += probe.TlsMs;
-                    tcpSum += probe.TcpMs;
+                    ct.ThrowIfCancellationRequested();
+                    var probe = await DpiProbe.MeasureAsync(host, target.Port, ct: ct).ConfigureAwait(false);
+                    if (probe.Ok)
+                    {
+                        hostOk = true;
+                        tlsSum += probe.TlsMs;
+                        tcpSum += probe.TcpMs;
+                        break;
+                    }
+                    error ??= $"{host}: {FriendlyError(probe.Error)}";
                 }
-                else
-                {
-                    error ??= FriendlyError(probe.Error);
-                }
+
+                // Первый же неподнятый домен делает стратегию непригодной —
+                // дальше перебирать её цели нет смысла.
+                if (!hostOk) break;
+                hostsOk++;
             }
 
             await _runner.StopAsync().ConfigureAwait(false);
 
+            bool success = hostsOk == probeHosts.Count;
             var result = new DpiStrategyResult(
                 strategy,
-                ok > 0,
-                ok > 0 ? tlsSum / ok : 0,
-                ok > 0 ? tcpSum / ok : 0,
-                ok,
-                attempts,
+                success,
+                success && hostsOk > 0 ? tlsSum / hostsOk : 0,
+                success && hostsOk > 0 ? tcpSum / hostsOk : 0,
+                hostsOk,
+                probeHosts.Count,
                 error);
 
             results.Add(result);

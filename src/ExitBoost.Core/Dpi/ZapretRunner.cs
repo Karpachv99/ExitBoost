@@ -94,9 +94,11 @@ public sealed class ZapretRunner : IDisposable
                 return false;
             }
 
-            // Даём движку поднять перехват.
+            // Даём движку поднять перехват. Полный реестр РКН (~1,7 млн строк)
+            // читается заметно дольше обычного списка — иначе первые замеры
+            // уходят в ещё не готовый winws.
             var proc = _process;
-            await Task.Delay(1200, ct).ConfigureAwait(false);
+            await Task.Delay(StartupDelayMs(target), ct).ConfigureAwait(false);
 
             if (proc is null) return false;
 
@@ -140,8 +142,8 @@ public sealed class ZapretRunner : IDisposable
     /// <summary>Полная командная строка winws для стратегии и цели.</summary>
     /// <remarks>
     /// В аргументах стратегии доступны подстановки:
-    /// %HOSTLIST% — путь к списку доменов, %ENGINE% — папка движка (для фейковых .bin),
-    /// %FAKES% — папка fakes рядом с движком (фейковые пакеты Flowseal).
+    /// %HOSTLIST% — списки доменов (свои + готовый список), %ENGINE% — папка движка
+    /// (для фейковых .bin), %FAKES% — папка fakes рядом с движком (фейковые пакеты Flowseal).
     /// </remarks>
     public static string BuildArguments(DpiStrategy strategy, DpiTarget target, string hostListPath, string? engineDirectory = null)
     {
@@ -160,6 +162,16 @@ public sealed class ZapretRunner : IDisposable
             parts.Add($"--hostlist=\"{Escape(extra)}\"");
         }
 
+        // %HOSTLIST% в профилях стратегии (в т.ч. UDP/QUIC) должен видеть те же
+        // списки, что и TCP-профиль. Иначе готовый список фильтрует только TCP,
+        // а QUIC остаётся без обхода.
+        string hostListArg = $"\"{Escape(hostListPath)}\"";
+        foreach (string extra in target.ExtraHostListPaths)
+        {
+            if (string.IsNullOrWhiteSpace(extra)) continue;
+            hostListArg += $" --hostlist=\"{Escape(extra)}\"";
+        }
+
         // Папка fakes лежит рядом с папкой движка: <install>\zapret-winws -> <install>\fakes.
         string fakesPrefix = string.IsNullOrEmpty(engineDirectory)
             ? ""
@@ -169,7 +181,7 @@ public sealed class ZapretRunner : IDisposable
         {
             if (string.IsNullOrWhiteSpace(arg)) continue;
             string a = arg
-                .Replace("%HOSTLIST%", $"\"{Escape(hostListPath)}\"")
+                .Replace("%HOSTLIST%", hostListArg)
                 .Replace("%FAKES%", fakesPrefix)
                 .Replace("%ENGINE%", engineDirectory ?? "");
             parts.Add(a);
@@ -177,6 +189,28 @@ public sealed class ZapretRunner : IDisposable
 
         parts.Add("--new");
         return string.Join(' ', parts);
+    }
+
+    /// <summary>Порог «тяжёлого» списка: полный реестр РКН.</summary>
+    private const long LargeHostListBytes = 5 * 1024 * 1024;
+
+    /// <summary>Пауза после запуска winws: большие списки читаются дольше.</summary>
+    private static int StartupDelayMs(DpiTarget target)
+    {
+        foreach (string path in target.ExtraHostListPaths)
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(path) && File.Exists(path) &&
+                    new FileInfo(path).Length > LargeHostListBytes)
+                    return 3500;
+            }
+            catch
+            {
+                // Размер не критичен: при ошибке используем обычную паузу.
+            }
+        }
+        return 1200;
     }
 
     private static string Escape(string path) => path.Replace("\"", "\\\"");
