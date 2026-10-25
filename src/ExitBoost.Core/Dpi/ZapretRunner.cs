@@ -42,10 +42,27 @@ public sealed class ZapretRunner : IDisposable
             return false;
         }
 
+        string? invalid = strategy.Validate(target);
+        if (invalid is not null)
+        {
+            Log?.Invoke(invalid);
+            return false;
+        }
+
+        string? ipSetPath = null;
         try
         {
             Directory.CreateDirectory(_bundle.InstallDirectory);
             await File.WriteAllLinesAsync(_bundle.HostListPath, target.HostList, ct).ConfigureAwait(false);
+
+            // Адреса игровых серверов — отдельным списком для --ipset:
+            // обход применяется только к ним, остальной трафик не затрагивается.
+            var gameIps = target.GameIpList;
+            if (gameIps.Count > 0)
+            {
+                await File.WriteAllLinesAsync(_bundle.IpSetPath, gameIps, ct).ConfigureAwait(false);
+                ipSetPath = _bundle.IpSetPath;
+            }
         }
         catch (Exception ex)
         {
@@ -59,7 +76,7 @@ public sealed class ZapretRunner : IDisposable
         {
             _bundle.StopOrphanWinws();
 
-            string args = BuildArguments(strategy, target, _bundle.HostListPath, _bundle.EngineDirectory);
+            string args = BuildArguments(strategy, target, _bundle.HostListPath, _bundle.EngineDirectory, ipSetPath);
             Log?.Invoke($"Запуск zapret: {args}"); LastOutput = "";
 
             // Движок запускаем через отдельную обёртку: он получает своё скрытое окно
@@ -144,22 +161,59 @@ public sealed class ZapretRunner : IDisposable
     /// В аргументах стратегии доступны подстановки:
     /// %HOSTLIST% — списки доменов (свои + готовый список), %ENGINE% — папка движка
     /// (для фейковых .bin), %FAKES% — папка fakes рядом с движком (фейковые пакеты Flowseal).
+    /// Для игр: %GAMETCPPORTS% — TCP-порты игры, %GAMEUDPPORTS% — UDP-порты,
+    /// %IPSET% — файл с адресами серверов (если адреса известны).
     /// </remarks>
-    public static string BuildArguments(DpiStrategy strategy, DpiTarget target, string hostListPath, string? engineDirectory = null)
+    public static string BuildArguments(
+        DpiStrategy strategy,
+        DpiTarget target,
+        string hostListPath,
+        string? engineDirectory = null,
+        string? ipSetPath = null)
     {
-        var parts = new List<string>
-        {
-            "--wf-tcp=80,443",
-            $"--filter-tcp={target.Port}",
-            $"--hostlist=\"{Escape(hostListPath)}\""
-        };
+        // Порты перехвата: 80/443 нужны сайтам, порты игры — её профилям.
+        // --wf-tcp/--wf-udp глобальные, поэтому собираем их из стратегии
+        // и цели в один аргумент каждый: повторный --wf-udp перезаписал бы первый.
+        string tcpPorts = DpiPorts.Merge("80,443", target.TcpPorts);
+        string udpPorts = target.UdpPorts;
 
-        // Готовый список заблокированных сервисов — отдельным файлом:
-        // полный реестр РКН (~1,7 млн строк) не копируем в hostlist.txt.
-        foreach (string extra in target.ExtraHostListPaths)
+        var profileArgs = new List<string>();
+        foreach (var arg in strategy.Args)
         {
-            if (string.IsNullOrWhiteSpace(extra)) continue;
-            parts.Add($"--hostlist=\"{Escape(extra)}\"");
+            if (string.IsNullOrWhiteSpace(arg)) continue;
+
+            if (arg.StartsWith("--wf-tcp=", StringComparison.OrdinalIgnoreCase))
+            {
+                tcpPorts = DpiPorts.Merge(tcpPorts, arg["--wf-tcp=".Length..]);
+                continue;
+            }
+            if (arg.StartsWith("--wf-udp=", StringComparison.OrdinalIgnoreCase))
+            {
+                udpPorts = DpiPorts.Merge(udpPorts, arg["--wf-udp=".Length..]);
+                continue;
+            }
+
+            profileArgs.Add(arg);
+        }
+
+        var parts = new List<string> { $"--wf-tcp={tcpPorts}" };
+        if (udpPorts.Length > 0) parts.Add($"--wf-udp={udpPorts}");
+
+        // Сайтовый профиль (443 + hostlist) игровой стратегии не нужен:
+        // её фильтры заданы портами игры. Иначе в одном профиле оказались бы
+        // два --filter-tcp и обход смешался бы с сайтовым.
+        if (!strategy.IsGame)
+        {
+            parts.Add($"--filter-tcp={target.Port}");
+            parts.Add($"--hostlist=\"{Escape(hostListPath)}\"");
+
+            // Готовый список заблокированных сервисов — отдельным файлом:
+            // полный реестр РКН (~1,7 млн строк) не копируем в hostlist.txt.
+            foreach (string extra in target.ExtraHostListPaths)
+            {
+                if (string.IsNullOrWhiteSpace(extra)) continue;
+                parts.Add($"--hostlist=\"{Escape(extra)}\"");
+            }
         }
 
         // %HOSTLIST% в профилях стратегии (в т.ч. UDP/QUIC) должен видеть те же
@@ -172,18 +226,34 @@ public sealed class ZapretRunner : IDisposable
             hostListArg += $" --hostlist=\"{Escape(extra)}\"";
         }
 
+        // %IPSET% подставляется как готовый путь в кавычках: в каталоге
+        // аргумент записан целиком (--ipset=%IPSET%), иначе получилось бы
+        // --ipset=--ipset="...".
+        string ipSetArg = string.IsNullOrEmpty(ipSetPath) ? "" : $"\"{Escape(ipSetPath)}\"";
+        string gameTcpPorts = string.Join(',', target.GameTcpPortList);
+        string gameUdpPorts = string.Join(',', target.GameUdpPortList);
+
         // Папка fakes лежит рядом с папкой движка: <install>\zapret-winws -> <install>\fakes.
         string fakesPrefix = string.IsNullOrEmpty(engineDirectory)
             ? ""
             : Path.Combine(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(engineDirectory))!, "fakes") + "\\";
 
-        foreach (var arg in strategy.Args)
+        foreach (var arg in profileArgs)
         {
-            if (string.IsNullOrWhiteSpace(arg)) continue;
+            // Адресов серверов нет — убираем только сам --ipset, профиль по
+            // портам игры остаётся рабочим. Пустой --ipset winws не примет.
+            if (arg.Contains("%IPSET%", StringComparison.Ordinal) && ipSetArg.Length == 0) continue;
+
             string a = arg
                 .Replace("%HOSTLIST%", hostListArg)
+                .Replace("%IPSET%", ipSetArg)
+                .Replace("%GAMETCPPORTS%", gameTcpPorts)
+                .Replace("%GAMEUDPPORTS%", gameUdpPorts)
+                .Replace("%TCPPORTS%", target.TcpPorts)
+                .Replace("%UDPPORTS%", target.UdpPorts)
                 .Replace("%FAKES%", fakesPrefix)
                 .Replace("%ENGINE%", engineDirectory ?? "");
+            if (string.IsNullOrWhiteSpace(a)) continue;
             parts.Add(a);
         }
 

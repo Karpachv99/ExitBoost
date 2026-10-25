@@ -35,15 +35,88 @@ public sealed class DpiOptimizer
         return error;
     }
 
-    /// <summary>Замер без обхода по первому домену (CLI и быстрая проверка).</summary>
+    /// <summary>Замер без обхода по первому адресу (CLI и быстрая проверка).</summary>
     public async Task<DpiProbeResult> MeasureBaselineAsync(DpiTarget target, int attempts = 2, CancellationToken ct = default)
     {
-        var host = target.ProbeHostList.FirstOrDefault();
+        string? host = target.ProbeHostList.FirstOrDefault()
+            ?? (target.IsGameMode ? target.GameProbeHosts.FirstOrDefault() : null);
         if (host is null) return DpiProbeResult.Failed("не указаны домены");
 
-        var probes = await MeasureBaselineAsync([host], target.Port, attempts, ct).ConfigureAwait(false);
-        var probe = probes[0];
+        DpiProbeResult probe = DpiProbeResult.Failed("нет ответа");
+        for (int i = 0; i < Math.Max(1, attempts); i++)
+        {
+            probe = await ProbeAsync(target, host, ct).ConfigureAwait(false);
+            if (probe.Ok) break;
+        }
         return new DpiProbeResult(probe.Ok, probe.TcpMs, probe.Ok, probe.TlsMs, probe.Error);
+    }
+
+    /// <summary>
+    /// Замер одного адреса: серверы игры проверяются TCP-коннектом на игровые
+    /// порты (TLS у них нет), домены сайтов — TLS-рукопожатием. Режим
+    /// определяется адресом, а не только целью: иначе включённые игровые порты
+    /// ломали бы проверку обычных сайтов.
+    /// </summary>
+    public static async Task<DpiProbeResult> ProbeAsync(DpiTarget target, string host, CancellationToken ct)
+    {
+        bool gameHost = target.IsGameMode &&
+            target.GameIpList.Contains(host, StringComparer.OrdinalIgnoreCase);
+
+        if (!gameHost)
+            return await DpiProbe.MeasureAsync(host, target.Port, ct: ct).ConfigureAwait(false);
+
+        var ports = target.GameProbePorts;
+        if (ports.Count == 0) ports = [target.Port];
+
+        DpiProbeResult last = DpiProbeResult.Failed("таймаут");
+        foreach (int port in ports)
+        {
+            last = await DpiProbe.MeasureTcpAsync(host, port, ct: ct).ConfigureAwait(false);
+            if (last.Ok) return last;
+        }
+        return last;
+    }
+
+    /// <summary>
+    /// Замер без обхода по цели: домены сайтов или адреса игровых серверов.
+    /// Движок на время замера останавливается.
+    /// </summary>
+    public async Task<IReadOnlyList<DpiHostProbe>> MeasureTargetAsync(
+        DpiTarget target, int attempts = 2, CancellationToken ct = default)
+    {
+        await _runner.StopAsync().ConfigureAwait(false);
+
+        var hosts = target.IsGameMode && target.GameProbeHosts.Count > 0
+            ? target.GameProbeHosts
+            : target.ProbeHostList;
+
+        var results = new List<DpiHostProbe>();
+        foreach (string host in hosts
+                     .Where(h => !string.IsNullOrWhiteSpace(h))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            bool ok = false;
+            double tcpMs = 0, tlsMs = 0;
+            string? error = null;
+
+            for (int i = 0; i < Math.Max(1, attempts); i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                var probe = await ProbeAsync(target, host, ct).ConfigureAwait(false);
+                if (probe.Ok)
+                {
+                    ok = true;
+                    tcpMs = probe.TcpMs;
+                    tlsMs = probe.TlsMs;
+                    break;
+                }
+                error = probe.Error;
+            }
+
+            results.Add(new DpiHostProbe(host, ok, ok ? tcpMs : 0, ok ? tlsMs : 0, ok ? null : error));
+        }
+
+        return results;
     }
 
     /// <summary>
@@ -114,11 +187,40 @@ public sealed class DpiOptimizer
             .Where(h => !string.IsNullOrWhiteSpace(h))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        // Игровой режим: перебор идёт по адресам серверов игры. Иначе сайтовые
+        // стратегии проверялись бы на IP игры, а игровые — на доменах, и ни одна
+        // не могла бы подойти ко всем целям сразу.
+        if (target.IsGameMode && target.GameProbeHosts.Count > 0)
+        {
+            var gameHosts = target.GameProbeHosts
+                .Where(h => !string.IsNullOrWhiteSpace(h))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var onlyGame = probeHosts
+                .Where(h => gameHosts.Contains(h, StringComparer.OrdinalIgnoreCase))
+                .ToList();
+
+            probeHosts = onlyGame.Count > 0 ? onlyGame : gameHosts;
+        }
+
         if (probeHosts.Count == 0) return results;
 
         foreach (var strategy in strategies)
         {
             ct.ThrowIfCancellationRequested();
+
+            // Игровая стратегия без портов/IP игры затронула бы весь трафик
+            // на 80/443 — в переборе она не участвует.
+            string? notApplicable = strategy.Validate(target);
+            if (notApplicable is not null)
+            {
+                var skipped = new DpiStrategyResult(strategy, false, 0, 0, 0, probeHosts.Count, notApplicable);
+                results.Add(skipped);
+                progress?.Report(skipped);
+                continue;
+            }
 
             bool started = await _runner.StartAsync(strategy, target, ct).ConfigureAwait(false);
             if (!started)
@@ -144,7 +246,7 @@ public sealed class DpiOptimizer
                 for (int i = 0; i < Math.Max(1, attempts); i++)
                 {
                     ct.ThrowIfCancellationRequested();
-                    var probe = await DpiProbe.MeasureAsync(host, target.Port, ct: ct).ConfigureAwait(false);
+                    var probe = await ProbeAsync(target, host, ct).ConfigureAwait(false);
                     if (probe.Ok)
                     {
                         hostOk = true;

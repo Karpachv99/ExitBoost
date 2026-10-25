@@ -10,6 +10,33 @@ namespace ExitBoost.Core.Dpi;
 public static class DpiProbe
 {
     /// <summary>
+    /// Проверить только TCP-соединение, без TLS. Нужно для игровых серверов:
+    /// у них нет сертификата и SNI, а блокировка видна именно по установке
+    /// соединения (RST, таймаут).
+    /// </summary>
+    public static async Task<DpiProbeResult> MeasureTcpAsync(
+        string host, int port = 443, int timeoutMs = 6000, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(host)) return DpiProbeResult.Failed("не указан адрес");
+
+        using var client = new TcpClient();
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(timeoutMs);
+            await client.ConnectAsync(host, port, timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            return DpiProbeResult.Failed(ex is OperationCanceledException ? "таймаут" : ex.Message);
+        }
+
+        // TLS у игрового сервера нет: успешный TCP-коннект и есть результат.
+        return new DpiProbeResult(true, sw.Elapsed.TotalMilliseconds, true, 0, null);
+    }
+
+    /// <summary>
     /// Выполнить замер. TLS-рукопожатие — то, что ломает DPI при RST-инъекции,
     /// поэтому именно оно является показателем работоспособности обхода.
     /// </summary>

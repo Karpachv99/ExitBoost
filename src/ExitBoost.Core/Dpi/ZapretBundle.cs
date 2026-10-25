@@ -33,6 +33,9 @@ public sealed class ZapretBundle
     public string WinwsPath => Path.Combine(EngineDirectory, "winws.exe");
     public string Winws2Path => Path.Combine(EngineDirectory, "winws2.exe");
     public string HostListPath => Path.Combine(InstallDirectory, "hostlist.txt");
+
+    /// <summary>Адреса игровых серверов для --ipset (обход только их трафика).</summary>
+    public string IpSetPath => Path.Combine(InstallDirectory, "ipset.txt");
     public string StatePath => Path.Combine(InstallDirectory, "install.json");
 
     /// <summary>Журнал диагностики.</summary>

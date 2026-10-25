@@ -80,6 +80,15 @@ public sealed class AppSettings
     /// <summary>Порт проверки обхода.</summary>
     public int DpiTargetPort { get; set; } = 443;
 
+    /// <summary>IP-адреса серверов игры для обхода DPI (по одному в строке).</summary>
+    public string DpiGameIps { get; set; } = "";
+
+    /// <summary>TCP-порты игры для обхода DPI (через запятую).</summary>
+    public string DpiGameTcpPorts { get; set; } = "";
+
+    /// <summary>UDP-порты игры для обхода DPI (через запятую).</summary>
+    public string DpiGameUdpPorts { get; set; } = "";
+
     /// <summary>Идентификатор выбранной стратегии zapret.</summary>
     public string DpiStrategyId { get; set; } = "";
 

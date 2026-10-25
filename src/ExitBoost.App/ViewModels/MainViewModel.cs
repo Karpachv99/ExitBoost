@@ -84,6 +84,7 @@ public sealed class MainViewModel : ObservableObject
         DpiPickTargetsCommand = new RelayCommand(() => PickDpiTargets());
         DpiCheckCommand = new RelayCommand(_ => CheckDpiAsync(), _ => !IsDpiBusy);
         DpiForceStopCommand = new RelayCommand(_ => ForceStopZapretAsync(), _ => !IsDpiBusy);
+        DpiDetectGameCommand = new RelayCommand(_ => { DetectGameServers(); return Task.CompletedTask; });
         VpnAddKeyCommand = new RelayCommand(_ => { AddVpnKey(); return Task.CompletedTask; });
         VpnRemoveKeyCommand = new RelayCommand(_ => { RemoveVpnKey(); return Task.CompletedTask; }, _ => SelectedVpnKey is not null);
         VpnPickTargetsCommand = new RelayCommand(() => PickVpnTargets());
@@ -167,6 +168,7 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand DpiPickTargetsCommand { get; }
     public RelayCommand DpiCheckCommand { get; }
     public RelayCommand DpiForceStopCommand { get; }
+    public RelayCommand DpiDetectGameCommand { get; }
     public RelayCommand RemoveDpiTargetCommand { get; }
     public RelayCommand VpnAddKeyCommand { get; }
     public RelayCommand VpnRemoveKeyCommand { get; }
@@ -308,6 +310,9 @@ public sealed class MainViewModel : ObservableObject
     private string _dpiUpdateStatus = "";
     private string _dpiTargetHosts = "";
     private int _dpiTargetPort = 443;
+    private string _dpiGameIps = "";
+    private string _dpiGameTcpPorts = "";
+    private string _dpiGameUdpPorts = "";
     private string _dpiBaselineText = "—";
     private string _dpiBestText = "—";
     private bool _isDpiBusy;
@@ -537,6 +542,134 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    // ------------------------------------------------------------ игры и zapret
+
+    /// <summary>IP-адреса серверов игры (по одному в строке).</summary>
+    public string DpiGameIps
+    {
+        get => _dpiGameIps;
+        set
+        {
+            if (!Set(ref _dpiGameIps, value)) return;
+            _settings.Update(s => s.DpiGameIps = value);
+            OnPropertyChanged(nameof(DpiGameSummary));
+        }
+    }
+
+    /// <summary>TCP-порты игры (через запятую, диапазоны допускаются).</summary>
+    public string DpiGameTcpPorts
+    {
+        get => _dpiGameTcpPorts;
+        set
+        {
+            if (!Set(ref _dpiGameTcpPorts, value)) return;
+            _settings.Update(s => s.DpiGameTcpPorts = value);
+            OnPropertyChanged(nameof(DpiGameSummary));
+        }
+    }
+
+    /// <summary>UDP-порты игры (через запятую, диапазоны допускаются).</summary>
+    public string DpiGameUdpPorts
+    {
+        get => _dpiGameUdpPorts;
+        set
+        {
+            if (!Set(ref _dpiGameUdpPorts, value)) return;
+            _settings.Update(s => s.DpiGameUdpPorts = value);
+            OnPropertyChanged(nameof(DpiGameSummary));
+        }
+    }
+
+    /// <summary>Короткая сводка по игровому режиму для интерфейса.</summary>
+    public string DpiGameSummary
+    {
+        get
+        {
+            var ipList = GameIpListFromText(_dpiGameIps);
+            var tcp = DpiPorts.Parse(_dpiGameTcpPorts);
+            var udp = DpiPorts.Parse(_dpiGameUdpPorts);
+
+            if (ipList.Count == 0 && tcp.Count == 0 && udp.Count == 0)
+                return "Игровой режим выключен: укажите серверы игры или её порты";
+
+            string parts = "";
+            if (ipList.Count > 0) parts += $"адресов: {ipList.Count}";
+            if (tcp.Count > 0) parts += (parts.Length > 0 ? ", " : "") + $"TCP: {string.Join(",", tcp)}";
+            if (udp.Count > 0) parts += (parts.Length > 0 ? ", " : "") + $"UDP: {string.Join(",", udp)}";
+            return "Игровой режим: " + parts;
+        }
+    }
+
+    private static IReadOnlyList<string> GameIpListFromText(string text) => text
+        .Split(['\n', '\r', ',', ';', ' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Where(IsIpAddress)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    private static bool IsIpAddress(string value)
+    {
+        string address = value;
+        int slash = value.IndexOf('/');
+        if (slash > 0) address = value[..slash];
+        return System.Net.IPAddress.TryParse(address, out _);
+    }
+
+    /// <summary>
+    /// Найти серверы выбранной игры по её активным соединениям и заполнить
+    /// IP-адреса и TCP-порты. UDP-порты Windows не отдаёт — их вводят вручную.
+    /// </summary>
+    private void DetectGameServers()
+    {
+        var process = SelectedProcess;
+        if (process is null)
+        {
+            DpiProgressText = "Сначала выберите игру в списке процессов (вкладка «VPN» → цель)";
+            return;
+        }
+
+        var pids = ProcessInspector.FindPids(process.Name);
+        if (pids.Count == 0)
+        {
+            DpiProgressText = $"Процесс {process.Name} не запущен";
+            return;
+        }
+
+        var connections = pids
+            .SelectMany(pid => ConnectionTable.GetByPid(pid))
+            .Where(c => c.Protocol == "TCP"
+                        && c.State == "ESTABLISHED"
+                        && c.RemoteAddress.Length > 0
+                        && IsIpAddress(c.RemoteAddress))
+            .ToList();
+
+        if (connections.Count == 0)
+        {
+            DpiProgressText = $"{process.Name}: нет активных соединений — войдите в игру и повторите";
+            return;
+        }
+
+        var ips = connections
+            .Select(c => c.RemoteAddress)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Порт 443 — обычный HTTPS: он уже покрыт сайтовыми стратегиями,
+        // в игровой профиль его не добавляем, иначе обход затронет весь браузер.
+        var ports = connections
+            .Select(c => c.RemotePort)
+            .Where(port => port is > 0 and not 443 and not 80)
+            .Distinct()
+            .OrderBy(port => port)
+            .ToList();
+
+        DpiGameIps = string.Join(Environment.NewLine, ips);
+        if (ports.Count > 0) DpiGameTcpPorts = string.Join(",", ports);
+
+        DpiProgressText = ports.Count > 0
+            ? $"{process.Name}: найдено серверов {ips.Count}, TCP-порты {string.Join(",", ports)}"
+            : $"{process.Name}: серверы найдены ({ips.Count}), но все на 443/80 — включите готовый список или VPN";
+    }
+
     /// <summary>Результат замера без обхода.</summary>
     public string DpiBaselineText
     {
@@ -717,6 +850,9 @@ public sealed class MainViewModel : ObservableObject
         _dpiTargetHosts = s.DpiTargetHosts;
         _blockedPreset = BlockedLists.Parse(s.BlockedListPreset);
         _dpiTargetPort = s.DpiTargetPort > 0 ? s.DpiTargetPort : 443;
+        _dpiGameIps = s.DpiGameIps;
+        _dpiGameTcpPorts = s.DpiGameTcpPorts;
+        _dpiGameUdpPorts = s.DpiGameUdpPorts;
         _dpiApplyOnConnect = s.DpiApplyOnConnect;
         _dpiAutoUpdate = s.DpiAutoUpdate;
         _dpiCheckUpdates = s.DpiCheckUpdates;
@@ -1236,7 +1372,10 @@ public sealed class MainViewModel : ObservableObject
         var target = new DpiTarget
         {
             Hosts = DpiTargetHosts,
-            Port = DpiTargetPort
+            Port = DpiTargetPort,
+            GameTcpPorts = DpiGameTcpPorts,
+            GameUdpPorts = DpiGameUdpPorts,
+            GameIps = GameIpListFromText(DpiGameIps).ToList()
         };
 
         // Готовый список передаём отдельным файлом: полный реестр РКН
@@ -1261,6 +1400,11 @@ public sealed class MainViewModel : ObservableObject
                 }
             }
         }
+
+        // Игровой режим: если своих доменов нет, замеряем адреса серверов игры.
+        // Для автоподбора это важнее выборки из готового списка.
+        if (target.HostList.Count == 0 && target.GameIpList.Count > 0)
+            target.ProbeHosts = target.GameIpList.ToList();
 
         return target;
     }
@@ -1352,12 +1496,14 @@ public sealed class MainViewModel : ObservableObject
         var target = await BuildDpiTargetAsync().ConfigureAwait(true);
         if (!target.IsValid)
         {
-            DpiProgressText = "Укажите домены через запятую или включите готовый список";
+            DpiProgressText = "Укажите домены через запятую, серверы игры или включите готовый список";
             return;
         }
         if (target.ProbeHostList.Count == 0)
         {
-            DpiProgressText = "Готовый список пуст — добавьте домены вручную";
+            DpiProgressText = target.IsGameMode
+                ? "Для автоподбора игры нужны IP серверов — нажмите «Серверы игры»"
+                : "Готовый список пуст — добавьте домены вручную";
             return;
         }
 
@@ -1366,7 +1512,7 @@ public sealed class MainViewModel : ObservableObject
         {
             DpiProgressText = "Замер без обхода...";
             var probes = await App.DpiOptimizer
-                .MeasureBaselineAsync(target.ProbeHostList, target.Port)
+                .MeasureTargetAsync(target)
                 .ConfigureAwait(true);
             var blocked = DpiOptimizer.SelectBlockedHosts(probes);
             DpiBaselineText = DescribeBaseline(probes);
@@ -1375,7 +1521,9 @@ public sealed class MainViewModel : ObservableObject
             // стратегия была бы случайностью, а не обходом.
             if (blocked.Count == 0)
             {
-                DpiBestText = "Домены открываются без обхода — автоподбор не требуется";
+                DpiBestText = target.IsGameMode
+                    ? "Серверы игры открываются без обхода — автоподбор не требуется"
+                    : "Домены открываются без обхода — автоподбор не требуется";
                 DpiProgressText = "Перебор не нужен";
                 return;
             }
@@ -1400,7 +1548,9 @@ public sealed class MainViewModel : ObservableObject
             var best = results.FirstOrDefault(r => r.Success);
             if (best is null)
             {
-                DpiBestText = "Ни одна стратегия не помогла — проверьте домены и DNS";
+                DpiBestText = target.IsGameMode
+                    ? "Ни одна стратегия не помогла — серверы игры, скорее всего, блокируются по IP: включите VPN"
+                    : "Ни одна стратегия не помогла — проверьте домены и DNS";
                 DpiProgressText = "Перебор завершён";
                 return;
             }
@@ -1432,7 +1582,14 @@ public sealed class MainViewModel : ObservableObject
             var target = await BuildDpiTargetAsync().ConfigureAwait(true);
             if (!target.IsValid)
             {
-                DpiProgressText = "Укажите домены через запятую или включите готовый список";
+                DpiProgressText = "Укажите домены через запятую, серверы игры или включите готовый список";
+                return;
+            }
+
+            string? notApplicable = SelectedDpiStrategy.Strategy.Validate(target);
+            if (notApplicable is not null)
+            {
+                DpiProgressText = notApplicable;
                 return;
             }
 
@@ -1461,12 +1618,14 @@ public sealed class MainViewModel : ObservableObject
         var target = await BuildDpiTargetAsync().ConfigureAwait(true);
         if (!target.IsValid)
         {
-            DpiProgressText = "Укажите домены через запятую или включите готовый список";
+            DpiProgressText = "Укажите домены через запятую, серверы игры или включите готовый список";
             return;
         }
         if (target.ProbeHostList.Count == 0)
         {
-            DpiProgressText = "Нет доменов для проверки — добавьте домен или включите готовый список";
+            DpiProgressText = target.IsGameMode
+                ? "Для проверки игры нужны IP серверов — нажмите «Серверы игры»"
+                : "Нет доменов для проверки — добавьте домен или включите готовый список";
             return;
         }
 
@@ -1477,14 +1636,16 @@ public sealed class MainViewModel : ObservableObject
 
             DpiProgressText = "Проверка текущего состояния...";
             var probes = await App.DpiOptimizer
-                .MeasureBaselineAsync(target.ProbeHostList, target.Port)
+                .MeasureTargetAsync(target)
                 .ConfigureAwait(true);
             var blocked = DpiOptimizer.SelectBlockedHosts(probes);
             DpiBaselineText = DescribeBaseline(probes);
 
             if (blocked.Count == 0)
             {
-                DpiBestText = "Домены открываются без обхода — обход не требуется";
+                DpiBestText = target.IsGameMode
+                    ? "Серверы игры открываются без обхода — обход не требуется"
+                    : "Домены открываются без обхода — обход не требуется";
                 DpiProgressText = "Проверка завершена";
                 return;
             }
@@ -1502,11 +1663,17 @@ public sealed class MainViewModel : ObservableObject
                 }
                 else
                 {
-                    var withBypass = await DpiProbe
-                        .MeasureAsync(blocked[0], target.Port)
+                    var withBypass = await DpiOptimizer
+                        .ProbeAsync(target, blocked[0], CancellationToken.None)
                         .ConfigureAwait(true);
+
+                    // У игровых серверов TLS нет: показываем время TCP-коннекта.
+                    bool gameHost = target.IsGameMode &&
+                        target.GameIpList.Contains(blocked[0], StringComparer.OrdinalIgnoreCase);
+                    double ms = gameHost ? withBypass.TcpMs : withBypass.TlsMs;
+
                     DpiBestText = withBypass.Ok
-                        ? $"{withBypass.TlsMs:F0} мс с обходом ({SelectedDpiStrategy.Name})"
+                        ? $"{ms:F0} мс с обходом ({SelectedDpiStrategy.Name})"
                         : $"с обходом не работает: {withBypass.Error}";
                 }
             }

@@ -21,7 +21,84 @@ public sealed class ZapretCatalog
     {
         var catalog = new ZapretCatalog();
         AddFlowseal(catalog);
+        AddGames(catalog);
         return catalog;
+    }
+
+    /// <summary>
+    /// Стратегии для игр. Отличаются от сайтовых тем, что не используют TLS-фейки
+    /// и не привязаны к домену: игровой протокол обычно идёт на своих портах
+    /// без SNI. Подстановки: %GAMETCPPORTS% — TCP-порты игры, %GAMEUDPPORTS% —
+    /// UDP-порты, %IPSET% — файл с адресами серверов (если они известны).
+    /// </summary>
+    private static void AddGames(ZapretCatalog catalog)
+    {
+        catalog.Strategies.Add(new DpiStrategy
+        {
+            Id = "game_tcp_fake",
+            Name = "Игры: фейк + разрыв TCP",
+            Description = "Для игрового TCP без TLS: перед первыми байтами отправляется " +
+                          "фейковый пакет, запрос рвётся на первом байте, номер пакета сдвигается. " +
+                          "Самый универсальный приём против DPI на нестандартных портах.",
+            Args =
+            [
+                "--filter-tcp=%GAMETCPPORTS%", "--ipset=%IPSET%",
+                "--dpi-desync=fake,fakedsplit",
+                "--dpi-desync-split-pos=1",
+                "--dpi-desync-fooling=badseq",
+                "--dpi-desync-repeats=8"
+            ],
+            Source = "Игры",
+            IsGameTcp = true
+        });
+
+        catalog.Strategies.Add(new DpiStrategy
+        {
+            Id = "game_tcp_split",
+            Name = "Игры: разрыв TCP",
+            Description = "Простое дробление первых байт игрового запроса без фейков. " +
+                          "Помогает, когда провайдер ищет сигнатуру в начале пакета.",
+            Args =
+            [
+                "--filter-tcp=%GAMETCPPORTS%", "--ipset=%IPSET%",
+                "--dpi-desync=split2",
+                "--dpi-desync-split-pos=2"
+            ],
+            Source = "Игры",
+            IsGameTcp = true
+        });
+
+        catalog.Strategies.Add(new DpiStrategy
+        {
+            Id = "game_tcp_disorder",
+            Name = "Игры: части вразброс",
+            Description = "Запрос делится на части и отправляется в обратном порядке — " +
+                          "DPI не собирает картину соединения. Вариант, если фейк провайдер уже распознаёт.",
+            Args =
+            [
+                "--filter-tcp=%GAMETCPPORTS%", "--ipset=%IPSET%",
+                "--dpi-desync=multidisorder",
+                "--dpi-desync-split-pos=1,midsld"
+            ],
+            Source = "Игры",
+            IsGameTcp = true
+        });
+
+        catalog.Strategies.Add(new DpiStrategy
+        {
+            Id = "game_udp_fake",
+            Name = "Игры: фейк UDP",
+            Description = "Для игрового UDP: перед настоящим пакетом уходят фейковые копии. " +
+                          "Помогает, когда провайдер режет UDP по сигнатуре (голос, бой, матчмейкинг).",
+            Args =
+            [
+                "--filter-udp=%GAMEUDPPORTS%", "--ipset=%IPSET%",
+                "--dpi-desync=fake",
+                "--dpi-desync-repeats=6"
+            ],
+            Source = "Игры",
+            IsGameUdp = true
+        });
     }
 
     /// <summary>
@@ -244,6 +321,16 @@ public sealed class ZapretCatalog
                 if (catalog is { Strategies.Count: > 0 })
                 {
                     catalog.FilePath = path;
+
+                    // Каталог на диске мог быть сохранён старой версией программы:
+                    // новые встроенные стратегии (например, игровые) добавляем,
+                    // не трогая уже сохранённые и выбранные пользователем.
+                    foreach (var strategy in BuildDefault().Strategies)
+                    {
+                        if (!catalog.Strategies.Any(s => s.Id == strategy.Id))
+                            catalog.Strategies.Add(strategy);
+                    }
+
                     return catalog;
                 }
             }
