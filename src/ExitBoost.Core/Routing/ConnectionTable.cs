@@ -16,6 +16,7 @@ public static class ConnectionTable
     private const int AF_INET6 = 23;
     private const int ERROR_INSUFFICIENT_BUFFER = 122;
     private const int TCP_TABLE_OWNER_PID_ALL = 5;
+    private const int UDP_TABLE_OWNER_PID = 1;
 
     private const int MIB_TCP_STATE_ESTABLISHED = 5;
     private const int MIB_TCP_STATE_SYN_SENT = 3;
@@ -106,10 +107,10 @@ public static class ConnectionTable
             if (ipVersion == AF_INET)
             {
                 int rowSize = Marshal.SizeOf<MibTcpRow>();
-                int count = size / rowSize;
+                int count = ReadRowCount(buffer, size, rowSize);
                 for (int i = 0; i < count; i++)
                 {
-                    var row = Marshal.PtrToStructure<MibTcpRow>(buffer + i * rowSize);
+                    var row = Marshal.PtrToStructure<MibTcpRow>(buffer + sizeof(uint) + i * rowSize);
                     if (row.State != MIB_TCP_STATE_ESTABLISHED && row.State != MIB_TCP_STATE_SYN_SENT) continue;
                     result.Add(new ConnectionInfo(
                         IpFromUInt(row.LocalAddr), (int)row.LocalPort,
@@ -120,10 +121,10 @@ public static class ConnectionTable
             else
             {
                 int rowSize = Marshal.SizeOf<MibTcp6Row>();
-                int count = size / rowSize;
+                int count = ReadRowCount(buffer, size, rowSize);
                 for (int i = 0; i < count; i++)
                 {
-                    var row = Marshal.PtrToStructure<MibTcp6Row>(buffer + i * rowSize);
+                    var row = Marshal.PtrToStructure<MibTcp6Row>(buffer + sizeof(uint) + i * rowSize);
                     if (row.State != MIB_TCP_STATE_ESTABLISHED && row.State != MIB_TCP_STATE_SYN_SENT) continue;
                     result.Add(new ConnectionInfo(
                         Ip6FromBytes(row.LocalAddr), (int)row.LocalPort,
@@ -143,22 +144,22 @@ public static class ConnectionTable
     {
         var result = new List<ConnectionInfo>();
         int size = 0;
-        uint code = GetExtendedUdpTable(IntPtr.Zero, ref size, false, ipVersion, TCP_TABLE_OWNER_PID_ALL, 0);
+        uint code = GetExtendedUdpTable(IntPtr.Zero, ref size, false, ipVersion, UDP_TABLE_OWNER_PID, 0);
         if (code != ERROR_INSUFFICIENT_BUFFER) return result;
 
         IntPtr buffer = Marshal.AllocHGlobal(size);
         try
         {
-            code = GetExtendedUdpTable(buffer, ref size, false, ipVersion, TCP_TABLE_OWNER_PID_ALL, 0);
+            code = GetExtendedUdpTable(buffer, ref size, false, ipVersion, UDP_TABLE_OWNER_PID, 0);
             if (code != 0) return result;
 
             if (ipVersion == AF_INET)
             {
                 int rowSize = Marshal.SizeOf<MibUdpRow>();
-                int count = size / rowSize;
+                int count = ReadRowCount(buffer, size, rowSize);
                 for (int i = 0; i < count; i++)
                 {
-                    var row = Marshal.PtrToStructure<MibUdpRow>(buffer + i * rowSize);
+                    var row = Marshal.PtrToStructure<MibUdpRow>(buffer + sizeof(uint) + i * rowSize);
                     result.Add(new ConnectionInfo(
                         IpFromUInt(row.LocalAddr), (int)row.LocalPort,
                         "", 0, "UDP", "", (int)row.OwningPid));
@@ -167,10 +168,10 @@ public static class ConnectionTable
             else
             {
                 int rowSize = Marshal.SizeOf<MibUdp6Row>();
-                int count = size / rowSize;
+                int count = ReadRowCount(buffer, size, rowSize);
                 for (int i = 0; i < count; i++)
                 {
-                    var row = Marshal.PtrToStructure<MibUdp6Row>(buffer + i * rowSize);
+                    var row = Marshal.PtrToStructure<MibUdp6Row>(buffer + sizeof(uint) + i * rowSize);
                     result.Add(new ConnectionInfo(
                         Ip6FromBytes(row.LocalAddr), (int)row.LocalPort,
                         "", 0, "UDP", "", (int)row.OwningPid));
@@ -182,6 +183,17 @@ public static class ConnectionTable
             Marshal.FreeHGlobal(buffer);
         }
         return result;
+    }
+
+    // TCP_TABLE_OWNER_PID_* and UDP_TABLE_OWNER_PID_* start with a DWORD row
+    // count. Skipping it is essential: treating it as row zero misaligns every
+    // entry and makes the owning PID/remote address appear to be garbage.
+    private static int ReadRowCount(IntPtr buffer, int bufferSize, int rowSize)
+    {
+        if (bufferSize < sizeof(uint)) return 0;
+        uint count = unchecked((uint)Marshal.ReadInt32(buffer));
+        long required = sizeof(uint) + (long)count * rowSize;
+        return required <= bufferSize ? (int)count : 0;
     }
 
     private static string StateName(uint state) => state switch

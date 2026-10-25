@@ -103,7 +103,7 @@ public partial class MainWindow : Window
         string? group = FindGroupName(source);
         if (group is null) return;
         var best = _viewModel.VpnKeyRows
-            .Where(r => r.Group == group)
+            .Where(r => r.CountryGroup == group)
             .OrderBy(r => r.Ping > 0 ? r.Ping : double.MaxValue)
             .FirstOrDefault();
         if (best is not null) ConnectRow(best);

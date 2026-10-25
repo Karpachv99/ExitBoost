@@ -40,7 +40,7 @@ public sealed class SingBoxRunner
     private const string TunAddress = "172.19.0.1";
 
     /// <summary>Сколько раз пробуем поднять ядро за одно подключение.</summary>
-    private const int StartAttempts = 2;
+    private const int StartAttempts = 3;
 
     public SingBoxRunner(string? baseDirectory = null)
     {
@@ -262,20 +262,18 @@ public sealed class SingBoxRunner
                 ct.ThrowIfCancellationRequested();
 
                 var proc = CreateCoreProcess();
+                lock (_lock) _proc = proc;
+                proc.Exited += OnCoreExited;
                 try
                 {
                     proc.Start();
                 }
                 catch (Exception ex)
                 {
+                    lock (_lock) if (_proc == proc) _proc = null;
                     proc.Dispose();
                     return new ConnectResult(false, $"не удалось запустить sing-box: {ex.Message}");
                 }
-
-                lock (_lock) _proc = proc;
-                // Подписываемся сразу: ядро может упасть ещё во время ожидания
-                // готовности, и мы должны увидеть это событие.
-                proc.Exited += OnCoreExited;
 
                 bool ready = await WaitForCoreReadyAsync(proc, ct).ConfigureAwait(false);
                 if (ready)
@@ -459,8 +457,7 @@ public sealed class SingBoxRunner
 
     private static bool IsOurTun(NetworkInterface n) =>
         n.Name.Equals(TunInterfaceName, StringComparison.OrdinalIgnoreCase) ||
-        n.Description.Contains("sing-tun", StringComparison.OrdinalIgnoreCase) ||
-        n.Description.Contains("wintun", StringComparison.OrdinalIgnoreCase);
+        n.Description.Contains("sing-tun", StringComparison.OrdinalIgnoreCase);
 
     private static async Task WaitForTunGoneAsync(TimeSpan timeout)
     {
@@ -567,9 +564,9 @@ public sealed class SingBoxRunner
             try { orphan.Dispose(); } catch { }
         }
 
-        if (orphans.Length > 0)
+        if (orphans.Length > 0 || TunInterfaceUp())
         {
-            await WaitForTunGoneAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            await WaitForTunGoneAsync(TimeSpan.FromSeconds(8)).ConfigureAwait(false);
             // Ядро снимает адаптер не мгновенно после выхода процесса.
             try { await Task.Delay(300, ct).ConfigureAwait(false); } catch (OperationCanceledException) { }
         }

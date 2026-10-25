@@ -32,6 +32,9 @@ public partial class App : Application
     /// <summary>Сохранённые VPN-ключи и правила маршрутизации.</summary>
     public static VpnKeyStore VpnStore { get; private set; } = null!;
 
+    /// <summary>Сбор UDP FLOW-событий для определения серверов выбранной игры.</summary>
+    public static WinDivertFlowMonitor GameFlowMonitor { get; private set; } = null!;
+
     /// <summary>Верна в процесс выхода — сигналы о закрытии теперь реальные.</summary>
     public static bool ShuttingDown { get; internal set; }
 
@@ -134,6 +137,12 @@ public partial class App : Application
         ZapretRunner = new ZapretRunner(Zapret);
         ZapretRunner.Log = m => Log.Info(m);
         DpiOptimizer = new DpiOptimizer(ZapretRunner);
+        GameFlowMonitor = new WinDivertFlowMonitor(Zapret.EngineDirectory)
+        {
+            Log = m => Log.Info(m)
+        };
+        if (Zapret.IsInstalled)
+            _ = GameFlowMonitor.StartAsync();
 
         // ---------------- Модуль VPN по ключу (sing-box) ----------------
         Vpn = new SingBoxRunner();
@@ -153,7 +162,10 @@ public partial class App : Application
                 if (update.IsNewer && Settings.Current.DpiAutoUpdate)
                 {
                     Log.Info($"Доступно обновление zapret ({update.ShortCommit}) — обновляю");
-                    if (await Zapret.InstallAsync())
+                    await GameFlowMonitor.StopAsync();
+                    bool installed = await Zapret.InstallAsync();
+                    if (Zapret.IsInstalled) await GameFlowMonitor.StartAsync();
+                    if (installed)
                     {
                         await Dispatcher.InvokeAsync(() =>
                         {
@@ -255,6 +267,7 @@ public partial class App : Application
         try
         {
             Log?.Info("Выход: отключаю соединение и чищу сеть перед закрытием");
+            if (GameFlowMonitor is not null) await GameFlowMonitor.StopAsync().ConfigureAwait(true);
             try { await ZapretRunner.ForceStopAllAsync().ConfigureAwait(true); } catch { }
             try { if (Vpn is not null) await Vpn.DisconnectAsync().ConfigureAwait(true); } catch { }
 
@@ -294,6 +307,7 @@ public partial class App : Application
     {
         try
         {
+            GameFlowMonitor?.StopAsync().Wait(TimeSpan.FromSeconds(3));
             ZapretRunner?.ForceStopAllAsync().Wait(TimeSpan.FromSeconds(5));
             Controller?.CleanupAllAsync().Wait(TimeSpan.FromSeconds(8));
         }
@@ -319,6 +333,7 @@ public partial class App : Application
         // Ранний выход при втором запуске: статические сервисы ещё не созданы.
         if (Settings is null || Controller is null)
         {
+            try { GameFlowMonitor?.Dispose(); } catch { }
             base.OnExit(e);
             return;
         }
@@ -341,6 +356,7 @@ public partial class App : Application
         {
             try { await Vpn.DisconnectAsync(); } catch { }
         }
+        try { if (GameFlowMonitor is not null) await GameFlowMonitor.StopAsync(); } catch { }
         // На любом пути выхода гасим обход DPI целиком: процессы zapret и драйвер.
         try { await ZapretRunner.ForceStopAllAsync().ConfigureAwait(true); } catch { }
         Log.DisableFileLogging();

@@ -20,7 +20,10 @@ public sealed class VpnKeyItemViewModel : ObservableObject
     /// <summary>Страна из названия ключа.</summary>
     public string Country => VpnCountry.Guess(Key.Name);
 
-    /// <summary>Группа — подписка целиком, а не отдельная страна.</summary>
+    /// <summary>Группа локаций: одна сворачиваемая группа на страну.</summary>
+    public string CountryGroup => Country == "—" ? "Другие локации" : Country;
+
+    /// <summary>Источник ключа, оставлен для карточки подробностей.</summary>
     public string Group => string.IsNullOrWhiteSpace(Key.SubscriptionName)
         ? "Добавленные ключи"
         : Key.SubscriptionName;
@@ -187,6 +190,7 @@ public sealed class VpnKeyItemViewModel : ObservableObject
         OnPropertyChanged(nameof(AddedAt));
         OnPropertyChanged(nameof(Server));
         OnPropertyChanged(nameof(Group));
+        OnPropertyChanged(nameof(CountryGroup));
         OnPropertyChanged(nameof(Flag));
         OnPropertyChanged(nameof(TransportLabel));
         OnPropertyChanged(nameof(TitleText));

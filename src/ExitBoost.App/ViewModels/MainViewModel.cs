@@ -87,15 +87,15 @@ public sealed class MainViewModel : ObservableObject
         DpiPickTargetsCommand = new RelayCommand(() => PickDpiTargets());
         DpiCheckCommand = new RelayCommand(_ => CheckDpiAsync(), _ => !IsDpiBusy);
         DpiForceStopCommand = new RelayCommand(_ => ForceStopZapretAsync(), _ => !IsDpiBusy);
-        DpiDetectGameCommand = new RelayCommand(_ => { DetectGameServers(); return Task.CompletedTask; });
+        DpiDetectGameCommand = new RelayCommand(_ => DetectGameServersAsync(), _ => !IsBusy && !IsDpiBusy);
         VpnAddKeyCommand = new RelayCommand(_ => { AddVpnKey(); return Task.CompletedTask; });
         VpnRemoveKeyCommand = new RelayCommand(_ => { RemoveVpnKey(); return Task.CompletedTask; }, _ => SelectedVpnKey is not null);
         VpnPickTargetsCommand = new RelayCommand(() => PickVpnTargets());
-         VpnConnectCommand = new RelayCommand(_ => VpnConnectAsync(), _ => IsVpnRunning is false && SelectedVpnKey is not null);
+          VpnConnectCommand = new RelayCommand(_ => VpnConnectAsync(), _ => !_vpnBusy && !IsVpnRunning);
          RemoveDpiTargetCommand = new RelayCommand(p => { RemoveDpiTarget(p); return Task.CompletedTask; });
          RemoveVpnSiteCommand = new RelayCommand(p => { RemoveVpnSite(p); return Task.CompletedTask; });
          RemoveVpnProgramCommand = new RelayCommand(p => { RemoveVpnProgram(p); return Task.CompletedTask; });
-         VpnDisconnectCommand = new RelayCommand(_ => VpnDisconnectAsync(), _ => IsVpnRunning);
+          VpnDisconnectCommand = new RelayCommand(_ => VpnDisconnectAsync(), _ => IsVpnRunning && !_vpnBusy);
         QuickConnectCommand = new RelayCommand(_ => QuickConnectAsync(), _ => !IsBusy);
         VpnInstallCoreCommand = new RelayCommand(_ => VpnInstallCoreAsync(), _ => App.Vpn.IsRunning is false && App.Vpn.IsCoreRunning is false);
         UpdateCheckCommand = new RelayCommand(_ => CheckAppUpdateAsync(manual: true), _ => !IsUpdateBusy);
@@ -125,8 +125,8 @@ public sealed class MainViewModel : ObservableObject
         DpiTargetsView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(VpnTargetPickItem.Group)));
         BuildVpnTargets();
         VpnKeysView = CollectionViewSource.GetDefaultView(VpnKeyRows);
-        VpnKeysView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(VpnKeyItemViewModel.Group)));
-        VpnKeysView.SortDescriptions.Add(new SortDescription(nameof(VpnKeyItemViewModel.Group), ListSortDirection.Ascending));
+        VpnKeysView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(VpnKeyItemViewModel.CountryGroup)));
+        VpnKeysView.SortDescriptions.Add(new SortDescription(nameof(VpnKeyItemViewModel.CountryGroup), ListSortDirection.Ascending));
         DpiGameStrategiesView = new ListCollectionView(DpiStrategies)
         {
             Filter = o => o is DpiStrategyItemViewModel item && item.IsGame
@@ -674,10 +674,10 @@ public sealed class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Найти серверы выбранной игры по её активным соединениям и заполнить
-    /// IP-адреса и TCP-порты. UDP-порты Windows не отдаёт — их вводят вручную.
+    /// Найти серверы игры по TCP-таблице и WinDivert FLOW (UDP), заполнить IP
+    /// и удалённые порты. FLOW содержит только метаданные соединения, не payload.
     /// </summary>
-    private void DetectGameServers()
+    private async Task DetectGameServersAsync()
     {
         // Процесс выбирается прямо в блоке игр. Если он не задан, пробуем
         // первую программу из VPN-сплита — её пользователь уже указал.
@@ -698,40 +698,78 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
-        var connections = pids
-            .SelectMany(pid => ConnectionTable.GetByPid(pid))
+        // FLOW monitor started with the application, so it already knows about
+        // UDP sessions created before this button was pressed. Ensure it is also
+        // started on machines where zapret was installed after app startup.
+        if (!App.GameFlowMonitor.IsListening && App.Zapret.IsInstalled)
+            await App.GameFlowMonitor.StartAsync().ConfigureAwait(true);
+
+        IReadOnlyList<UdpFlowInfo> udpFlows = pids
+            .SelectMany(App.GameFlowMonitor.GetUdpFlows)
+            .ToList();
+        if (udpFlows.Count == 0 && App.GameFlowMonitor.IsListening)
+        {
+            DpiProgressText = $"Слушаю UDP-соединения процесса {name}… Вернитесь в игру или переподключитесь к серверу.";
+            await Task.Delay(TimeSpan.FromSeconds(5)).ConfigureAwait(true);
+            udpFlows = pids.SelectMany(App.GameFlowMonitor.GetUdpFlows).ToList();
+        }
+
+        var connections = pids.SelectMany(pid => ConnectionTable.GetByPid(pid)).ToList();
+        var tcpConnections = connections
             .Where(c => c.Protocol == "TCP"
-                        && c.State == "ESTABLISHED"
+                        && c.State is "ESTABLISHED" or "SYN_SENT"
                         && c.RemoteAddress.Length > 0
                         && IsIpAddress(c.RemoteAddress))
             .ToList();
+        var udpPorts = udpFlows
+            .Where(f => f.RemotePort > 0)
+            .Select(f => f.RemotePort)
+            .Distinct()
+            .OrderBy(port => port)
+            .ToList();
+        var localUdpPorts = connections
+            .Where(c => c.Protocol == "UDP" && c.LocalPort > 0)
+            .Select(c => c.LocalPort)
+            .Distinct()
+            .OrderBy(port => port)
+            .ToList();
 
-        if (connections.Count == 0)
+        if (tcpConnections.Count == 0 && udpFlows.Count == 0 && localUdpPorts.Count == 0)
         {
-            DpiProgressText = $"{name}: нет активных соединений — войдите в игру и повторите";
+            DpiProgressText = $"{name}: соединения не обнаружены. Проверьте, что приложение запущено от администратора, и повторите в игре.";
             return;
         }
 
-        var ips = connections
+        var ips = tcpConnections
             .Select(c => c.RemoteAddress)
+            .Concat(udpFlows.Select(f => f.RemoteAddress))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         // Порт 443 — обычный HTTPS: он уже покрыт сайтовыми стратегиями,
         // в игровой профиль его не добавляем, иначе обход затронет весь браузер.
-        var ports = connections
+        var ports = tcpConnections
             .Select(c => c.RemotePort)
             .Where(port => port is > 0 and not 443 and not 80)
             .Distinct()
             .OrderBy(port => port)
             .ToList();
 
-        DpiGameIps = string.Join(Environment.NewLine, ips);
+        if (ips.Count > 0) DpiGameIps = string.Join(Environment.NewLine, ips);
         if (ports.Count > 0) DpiGameTcpPorts = string.Join(",", ports);
+        if (udpPorts.Count > 0) DpiGameUdpPorts = string.Join(",", udpPorts);
 
-        DpiProgressText = ports.Count > 0
-            ? $"{name}: найдено серверов {ips.Count}, TCP-порты {string.Join(",", ports)}"
-            : $"{name}: серверы найдены ({ips.Count}), но все на 443/80 — включите готовый список или VPN";
+        if (tcpConnections.Count > 0 || udpFlows.Count > 0)
+        {
+            DpiProgressText = $"{name}: найдено адресов серверов {ips.Count}"
+                + (ports.Count > 0 ? $", TCP {string.Join(",", ports)}" : "")
+                + (udpFlows.Count > 0 ? $", UDP {string.Join(",", udpPorts)}" : "")
+                + (ips.Count == 0 ? ". Адреса серверов появятся после сетевой активности игры." : "");
+        }
+        else
+        {
+            DpiProgressText = $"{name}: Windows видит UDP-порты процесса {string.Join(",", localUdpPorts)}, но удалённый адрес ещё не пойман. Вернитесь в игру/лобби и нажмите «Серверы игры» повторно.";
+        }
     }
 
     /// <summary>Результат замера без обхода.</summary>
@@ -891,6 +929,7 @@ public sealed class MainViewModel : ObservableObject
             ConnectCommand.RaiseCanExecuteChanged();
             DisconnectCommand.RaiseCanExecuteChanged();
             QuickConnectCommand.RaiseCanExecuteChanged();
+            DpiDetectGameCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -1237,7 +1276,10 @@ public sealed class MainViewModel : ObservableObject
         IsDpiBusy = true;
         try
         {
+            await App.GameFlowMonitor.StopAsync().ConfigureAwait(true);
             await App.ZapretRunner.ForceStopAllAsync().ConfigureAwait(true);
+            if (App.Zapret.IsInstalled)
+                await App.GameFlowMonitor.StartAsync().ConfigureAwait(true);
             DpiProgressText = "zapret принудительно остановлен (процессы и драйвер)";
         }
         catch (Exception ex)
@@ -1246,6 +1288,8 @@ public sealed class MainViewModel : ObservableObject
         }
         finally
         {
+            if (!App.GameFlowMonitor.IsListening && App.Zapret.IsInstalled)
+                await App.GameFlowMonitor.StartAsync().ConfigureAwait(true);
             IsDpiBusy = false;
             RefreshDpiStatus();
         }
@@ -1533,7 +1577,17 @@ public sealed class MainViewModel : ObservableObject
             // Останавливаем движок: установка перезаписывает его файлы.
             try { await App.ZapretRunner.StopAsync().ConfigureAwait(true); } catch { }
 
-            bool ok = await App.Zapret.InstallAsync().ConfigureAwait(true);
+            await App.GameFlowMonitor.StopAsync().ConfigureAwait(true);
+            bool ok;
+            try
+            {
+                ok = await App.Zapret.InstallAsync().ConfigureAwait(true);
+            }
+            finally
+            {
+                if (App.Zapret.IsInstalled)
+                    await App.GameFlowMonitor.StartAsync().ConfigureAwait(true);
+            }
             if (!ok)
             {
                 DpiUpdateStatus = "Не удалось загрузить zapret"
@@ -1809,6 +1863,7 @@ public sealed class MainViewModel : ObservableObject
             if (!Set(ref _selectedVpnKey, value)) return;
             RefreshHeaderKeyText();
             VpnConnectCommand.RaiseCanExecuteChanged();
+            ConnectCommand.RaiseCanExecuteChanged();
             VpnRemoveKeyCommand.RaiseCanExecuteChanged();
         }
     }
@@ -2265,22 +2320,55 @@ public sealed class MainViewModel : ObservableObject
         var key = SelectedVpnKey?.Key;
         if (key is null)
         {
-            VpnStatusText = "выберите локацию в списке слева";
+            VpnStatusText = "выберите локацию для подключения";
             VpnStatusColor = "#F5A524";
+            StateText = "Выберите локацию";
+            StateColor = "#F5A524";
+            StatusText = "Сначала выберите локацию на странице «Локации»";
+            SelectedPageIndex = 1;
             return;
         }
 
         _vpnBusy = true;
+        VpnConnectCommand.RaiseCanExecuteChanged();
+        VpnDisconnectCommand.RaiseCanExecuteChanged();
         try
         {
             SaveVpnRouting();
             VpnStatusText = "подключение...";
             VpnStatusColor = "#F5A524";
-            await ConnectVpnCoreAsync(key).ConfigureAwait(true);
+            StateText = "Подключение";
+            StateColor = "#F5A524";
+            StatusText = $"Подключение к {key.Name}…";
+            if (await ConnectVpnCoreAsync(key).ConfigureAwait(true))
+            {
+                _connectedAt = DateTime.UtcNow;
+                StateText = "Подключено";
+                StateColor = "#2FBF71";
+                StatusText = $"Подключено к {key.Name}";
+                InterfaceText = $"VPN · {key.Protocol}";
+            }
+            else
+            {
+                StateText = "Ошибка";
+                StateColor = "#EF4444";
+                StatusText = VpnStatusText;
+            }
+        }
+        catch (Exception ex)
+        {
+            VpnStatusText = "ошибка: " + ex.Message;
+            VpnStatusColor = "#EF4444";
+            StateText = "Ошибка";
+            StateColor = "#EF4444";
+            StatusText = VpnStatusText;
+            _log.Error("Ошибка подключения VPN: " + ex);
         }
         finally
         {
             _vpnBusy = false;
+            VpnConnectCommand.RaiseCanExecuteChanged();
+            VpnDisconnectCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -2370,6 +2458,8 @@ public sealed class MainViewModel : ObservableObject
             VpnConnectCommand.RaiseCanExecuteChanged();
             VpnDisconnectCommand.RaiseCanExecuteChanged();
             QuickConnectCommand.RaiseCanExecuteChanged();
+            ConnectCommand.RaiseCanExecuteChanged();
+            DisconnectCommand.RaiseCanExecuteChanged();
         }
 
         if (running)
