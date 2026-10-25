@@ -386,7 +386,7 @@ if ($PublishGitLab) {
             $name = Split-Path $file -Leaf
             Write-Host "  загрузка $name"
             & curl.exe --http1.1 --ssl-no-revoke --fail --silent --show-error `
-                --request PUT --header "PRIVATE-TOKEN: $token" `
+                --output NUL --request PUT --header "PRIVATE-TOKEN: $token" `
                 --upload-file $name "$api/packages/generic/$packageName/$Version/$name"
             if ($LASTEXITCODE -ne 0) { throw "Не удалось загрузить $name в Package Registry" }
         }
@@ -410,7 +410,8 @@ if ($PublishGitLab) {
             throw "Не удалось создать релиз GitLab (HTTP $code).$detail"
         }
 
-        $latest = (& curl.exe --http1.1 --ssl-no-revoke --silent --fail "$api/releases/permalink/latest") -join "`n"
+        # permalink/latest — это 302 на конкретный релиз, без --location тело пустое.
+        $latest = (& curl.exe --http1.1 --ssl-no-revoke --silent --fail --location "$api/releases/permalink/latest") -join "`n"
         if ($LASTEXITCODE -ne 0) { throw 'Не удалось проверить последний релиз GitLab' }
         $latestTag = ($latest | ConvertFrom-Json).tag_name
         if ($latestTag -ne $tag) {
@@ -420,6 +421,7 @@ if ($PublishGitLab) {
     finally {
         Pop-Location
         $ErrorActionPreference = $previousEap
+        if (Test-Path $responsePath) { Remove-Item $responsePath -Force -ErrorAction SilentlyContinue }
     }
 
     Write-Host "GitLab: https://gitlab.com/$projectPath/-/releases/$tag" -ForegroundColor Green
