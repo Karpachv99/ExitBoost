@@ -764,6 +764,7 @@ public sealed class MainViewModel : ObservableObject
             DpiProgressText = $"{name}: найдено адресов серверов {ips.Count}"
                 + (ports.Count > 0 ? $", TCP {string.Join(",", ports)}" : "")
                 + (udpFlows.Count > 0 ? $", UDP {string.Join(",", udpPorts)}" : "")
+                + (udpFlows.Count == 0 ? ". UDP-соединений у выбранного процесса не обнаружено — возможно, эта игра сейчас использует только TCP." : "")
                 + (ips.Count == 0 ? ". Адреса серверов появятся после сетевой активности игры." : "");
         }
         else

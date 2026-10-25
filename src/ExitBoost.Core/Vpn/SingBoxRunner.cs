@@ -275,7 +275,9 @@ public sealed class SingBoxRunner
                     return new ConnectResult(false, $"не удалось запустить sing-box: {ex.Message}");
                 }
 
-                bool ready = await WaitForCoreReadyAsync(proc, ct).ConfigureAwait(false);
+                TimeSpan startupTimeout = StartTimeout();
+                Log?.Invoke($"ожидание готовности sing-box и TUN (до {startupTimeout.TotalSeconds:0} с, попытка {attempt}/{StartAttempts})");
+                bool ready = await WaitForCoreReadyAsync(proc, startupTimeout, ct).ConfigureAwait(false);
                 if (ready)
                 {
                     ActiveKey = key;
@@ -351,11 +353,11 @@ public sealed class SingBoxRunner
     /// Ждём, пока ядро поднимет TUN и службу управления. Таймаут — это неудача:
     /// раньше он возвращал «успех» живому, но ещё не готовому ядру.
     /// </summary>
-    private async Task<bool> WaitForCoreReadyAsync(Process proc, CancellationToken ct)
+    private async Task<bool> WaitForCoreReadyAsync(Process proc, TimeSpan startupTimeout, CancellationToken ct)
     {
         using var handler = new SocketsHttpHandler { UseProxy = false, ConnectTimeout = TimeSpan.FromMilliseconds(500) };
         using var http = new HttpClient(handler) { Timeout = TimeSpan.FromMilliseconds(700) };
-        var deadline = DateTime.UtcNow + StartTimeout();
+        var deadline = DateTime.UtcNow + startupTimeout;
         bool apiReady = false;
 
         while (DateTime.UtcNow < deadline)
@@ -392,6 +394,7 @@ public sealed class SingBoxRunner
             await Task.Delay(200, ct).ConfigureAwait(false);
         }
 
+        Log?.Invoke($"sing-box не дождался готовности: control API={(apiReady ? "доступен" : "не отвечает")}, TUN={(TunInterfaceUp() ? "поднят" : "не поднят")}");
         return false;
     }
 
@@ -401,9 +404,13 @@ public sealed class SingBoxRunner
         long size = 0;
         try { size = new FileInfo(ConfigPath).Length; } catch { }
 
-        double seconds = 20;
-        if (size > 20 * 1024 * 1024) seconds += 25;
-        else if (size > 5 * 1024 * 1024) seconds += 15;
+        // На Windows создание Wintun и установка маршрутов могут занимать
+        // десятки секунд, особенно сразу после завершения предыдущего ядра.
+        // Короткий таймаут убивал живой sing-box, из-за чего подключение
+        // стабильно удавалось лишь со следующего запуска.
+        double seconds = 60;
+        if (size > 20 * 1024 * 1024) seconds = 180;
+        else if (size > 5 * 1024 * 1024) seconds = 120;
         return TimeSpan.FromSeconds(seconds);
     }
 
@@ -419,7 +426,7 @@ public sealed class SingBoxRunner
         try { if (!SafeHasExited(proc)) proc.Kill(entireProcessTree: true); } catch { }
         await WaitForExitAsync(proc, TimeSpan.FromSeconds(3)).ConfigureAwait(false);
         try { proc.Dispose(); } catch { }
-        await WaitForTunGoneAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        await WaitForTunGoneAsync(TimeSpan.FromSeconds(15)).ConfigureAwait(false);
     }
 
     private static async Task WaitForExitAsync(Process proc, TimeSpan timeout)
@@ -566,7 +573,7 @@ public sealed class SingBoxRunner
 
         if (orphans.Length > 0 || TunInterfaceUp())
         {
-            await WaitForTunGoneAsync(TimeSpan.FromSeconds(8)).ConfigureAwait(false);
+            await WaitForTunGoneAsync(TimeSpan.FromSeconds(20)).ConfigureAwait(false);
             // Ядро снимает адаптер не мгновенно после выхода процесса.
             try { await Task.Delay(300, ct).ConfigureAwait(false); } catch (OperationCanceledException) { }
         }
