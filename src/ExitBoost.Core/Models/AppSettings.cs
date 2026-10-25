@@ -83,6 +83,9 @@ public sealed class AppSettings
     /// <summary>IP-адреса серверов игры для обхода DPI (по одному в строке).</summary>
     public string DpiGameIps { get; set; } = "";
 
+    /// <summary>Имя процесса игры, по которому ищутся её серверы.</summary>
+    public string DpiGameProcess { get; set; } = "";
+
     /// <summary>TCP-порты игры для обхода DPI (через запятую).</summary>
     public string DpiGameTcpPorts { get; set; } = "";
 

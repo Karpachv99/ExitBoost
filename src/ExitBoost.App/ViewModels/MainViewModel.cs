@@ -313,6 +313,7 @@ public sealed class MainViewModel : ObservableObject
     private string _dpiGameIps = "";
     private string _dpiGameTcpPorts = "";
     private string _dpiGameUdpPorts = "";
+    private string _dpiGameProcess = "";
     private string _dpiBaselineText = "—";
     private string _dpiBestText = "—";
     private bool _isDpiBusy;
@@ -544,6 +545,23 @@ public sealed class MainViewModel : ObservableObject
 
     // ------------------------------------------------------------ игры и zapret
 
+    /// <summary>
+    /// Имя процесса игры, по соединениям которого ищутся серверы.
+    /// Выбирается прямо в блоке игр: цель VPN для этого не нужна.
+    /// </summary>
+    public string DpiGameProcess
+    {
+        get => _dpiGameProcess;
+        set
+        {
+            // ComboBox при обновлении списка процессов может прислать null —
+            // храним пустую строку, чтобы не ловить NullReferenceException.
+            if (!Set(ref _dpiGameProcess, value ?? "")) return;
+            _settings.Update(s => s.DpiGameProcess = _dpiGameProcess);
+            OnPropertyChanged(nameof(DpiGameSummary));
+        }
+    }
+
     /// <summary>IP-адреса серверов игры (по одному в строке).</summary>
     public string DpiGameIps
     {
@@ -593,7 +611,9 @@ public sealed class MainViewModel : ObservableObject
                 return "Игровой режим выключен: укажите серверы игры или её порты";
 
             string parts = "";
-            if (ipList.Count > 0) parts += $"адресов: {ipList.Count}";
+            if (!string.IsNullOrWhiteSpace(_dpiGameProcess))
+                parts = $"игра: {_dpiGameProcess}";
+            if (ipList.Count > 0) parts += (parts.Length > 0 ? ", " : "") + $"адресов: {ipList.Count}";
             if (tcp.Count > 0) parts += (parts.Length > 0 ? ", " : "") + $"TCP: {string.Join(",", tcp)}";
             if (udp.Count > 0) parts += (parts.Length > 0 ? ", " : "") + $"UDP: {string.Join(",", udp)}";
             return "Игровой режим: " + parts;
@@ -620,17 +640,22 @@ public sealed class MainViewModel : ObservableObject
     /// </summary>
     private void DetectGameServers()
     {
-        var process = SelectedProcess;
-        if (process is null)
+        // Процесс выбирается прямо в блоке игр. Если он не задан, пробуем
+        // первую программу из VPN-сплита — её пользователь уже указал.
+        string name = (DpiGameProcess ?? "").Trim();
+        if (name.Length == 0)
+            name = VpnSelectedPrograms.FirstOrDefault() ?? "";
+
+        if (name.Length == 0)
         {
-            DpiProgressText = "Сначала выберите игру в списке процессов (вкладка «VPN» → цель)";
+            DpiProgressText = "Выберите процесс игры в блоке «Игры: серверы и порты»";
             return;
         }
 
-        var pids = ProcessInspector.FindPids(process.Name);
+        var pids = ProcessInspector.FindPids(name);
         if (pids.Count == 0)
         {
-            DpiProgressText = $"Процесс {process.Name} не запущен";
+            DpiProgressText = $"Процесс {name} не запущен — запустите игру и войдите в неё";
             return;
         }
 
@@ -644,7 +669,7 @@ public sealed class MainViewModel : ObservableObject
 
         if (connections.Count == 0)
         {
-            DpiProgressText = $"{process.Name}: нет активных соединений — войдите в игру и повторите";
+            DpiProgressText = $"{name}: нет активных соединений — войдите в игру и повторите";
             return;
         }
 
@@ -666,8 +691,8 @@ public sealed class MainViewModel : ObservableObject
         if (ports.Count > 0) DpiGameTcpPorts = string.Join(",", ports);
 
         DpiProgressText = ports.Count > 0
-            ? $"{process.Name}: найдено серверов {ips.Count}, TCP-порты {string.Join(",", ports)}"
-            : $"{process.Name}: серверы найдены ({ips.Count}), но все на 443/80 — включите готовый список или VPN";
+            ? $"{name}: найдено серверов {ips.Count}, TCP-порты {string.Join(",", ports)}"
+            : $"{name}: серверы найдены ({ips.Count}), но все на 443/80 — включите готовый список или VPN";
     }
 
     /// <summary>Результат замера без обхода.</summary>
@@ -851,6 +876,7 @@ public sealed class MainViewModel : ObservableObject
         _blockedPreset = BlockedLists.Parse(s.BlockedListPreset);
         _dpiTargetPort = s.DpiTargetPort > 0 ? s.DpiTargetPort : 443;
         _dpiGameIps = s.DpiGameIps;
+        _dpiGameProcess = s.DpiGameProcess ?? "";
         _dpiGameTcpPorts = s.DpiGameTcpPorts;
         _dpiGameUdpPorts = s.DpiGameUdpPorts;
         _dpiApplyOnConnect = s.DpiApplyOnConnect;
@@ -1114,6 +1140,9 @@ public sealed class MainViewModel : ObservableObject
         _processSignature = signature;
 
         var previous = SelectedProcess;
+        // ComboBox игрового режима привязан к DpiGameProcess через SelectedValue:
+        // очистка списка обнуляет выбор, поэтому запоминаем имя и возвращаем его.
+        string gameProcess = _dpiGameProcess ?? "";
 
         Processes.Clear();
         foreach (var p in list) Processes.Add(p);
@@ -1122,6 +1151,9 @@ public sealed class MainViewModel : ObservableObject
         {
             SelectedProcess = Processes.FirstOrDefault(p => p.Path == previous.Path && p.Name == previous.Name);
         }
+
+        if (gameProcess.Length > 0 && _dpiGameProcess != gameProcess)
+            DpiGameProcess = gameProcess;
 
         BuildVpnTargets();
     }

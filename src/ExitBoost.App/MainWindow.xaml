@@ -675,7 +675,20 @@
                                     <StackPanel>
                                         <TextBlock Style="{StaticResource H2}" Text="Игры: серверы и порты" Margin="0,0,0,4" />
                                         <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap"
-                                                   Text="Для игр вроде Path of Exile 2, которые провайдер режет на своих портах. Нажмите «Серверы игры», когда игра уже подключилась: программа возьмёт адреса и порты из её соединений. Затем выберите стратегию с пометкой «Игры»." />
+                                                   Text="Для игр вроде Path of Exile 2, которые провайдер режет на своих портах. Выберите процесс запущенной игры, войдите в неё и нажмите «Серверы игры»: программа возьмёт адреса и порты из её соединений. Затем выберите стратегию с пометкой «Игры»." />
+                                        <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0" Text="Процесс игры" />
+                                        <ComboBox Margin="0,4,0,0" MinHeight="32" MaxDropDownHeight="260"
+                                                  ItemsSource="{Binding Processes}"
+                                                  SelectedValuePath="Name"
+                                                  SelectedValue="{Binding DpiGameProcess, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                  IsTextSearchEnabled="True"
+                                                  ToolTip="Выберите запущенную игру — по её соединениям будут найдены серверы">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding DisplayName}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
                                         <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0" Text="IP серверов игры (по одному в строке)" />
                                         <TextBox Margin="0,4,0,0" MinHeight="58" AcceptsReturn="True" TextWrapping="NoWrap"
                                                  VerticalScrollBarVisibility="Auto"
