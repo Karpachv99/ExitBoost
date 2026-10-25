@@ -1617,6 +1617,9 @@ public sealed class MainViewModel : ObservableObject
         set => Set(ref _isVpnRunning, value);
     }
 
+    /// <summary>Защита от двойного клика: подключение уже идёт.</summary>
+    private bool _vpnBusy;
+
     private bool _vpnModeIsFull;
     /// <summary>true — весь трафик через VPN (нужно подтверждение), false — только выбранные сайты/программы.</summary>
     public bool VpnModeIsFull
@@ -1972,6 +1975,10 @@ public sealed class MainViewModel : ObservableObject
 
     private async Task VpnConnectAsync()
     {
+        // Статус «работает» обновляется раз в секунду — без этого флага
+        // повторный клик успевал запустить второе подключение поверх первого.
+        if (_vpnBusy) return;
+
         var key = SelectedVpnKey?.Key;
         if (key is null)
         {
@@ -1980,10 +1987,18 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
-        SaveVpnRouting();
-        VpnStatusText = "подключение...";
-        VpnStatusColor = "#F5A524";
-        await ConnectVpnCoreAsync(key).ConfigureAwait(true);
+        _vpnBusy = true;
+        try
+        {
+            SaveVpnRouting();
+            VpnStatusText = "подключение...";
+            VpnStatusColor = "#F5A524";
+            await ConnectVpnCoreAsync(key).ConfigureAwait(true);
+        }
+        finally
+        {
+            _vpnBusy = false;
+        }
     }
 
     /// <summary>Двойной клик по локации: подключение только выбранного VPN-ключа.</summary>
@@ -1997,8 +2012,10 @@ public sealed class MainViewModel : ObservableObject
         if (IsVpnRunning)
         {
             if (App.Vpn.ActiveKey?.Id == target.Id) return; // уже подключены к этой локации
+            // Отключение теперь дожидается выхода ядра и освобождения TUN —
+            // обновляем статус сразу, не полагаясь на секундный таймер.
             await App.Vpn.DisconnectAsync().ConfigureAwait(true);
-            await Task.Delay(400).ConfigureAwait(true);
+            RefreshVpnStatus();
         }
 
         if (!IsVpnRunning)
@@ -2037,7 +2054,11 @@ public sealed class MainViewModel : ObservableObject
         return true;
     }
 
-    private async Task VpnDisconnectAsync() => await App.Vpn.DisconnectAsync().ConfigureAwait(true);
+    private async Task VpnDisconnectAsync()
+    {
+        await App.Vpn.DisconnectAsync().ConfigureAwait(true);
+        RefreshVpnStatus();
+    }
 
     private async Task VpnInstallCoreAsync()
     {

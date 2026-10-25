@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Text.Json;
 using ExitBoost.Core.Routing;
@@ -20,12 +22,25 @@ public sealed class SingBoxRunner
     public string BaseDirectory { get; }
     public string CoreDirectory => Path.Combine(BaseDirectory, "core");
     public string BinaryPath => Path.Combine(CoreDirectory, "sing-box.exe");
+
+    /// <summary>Скачанное обновление ядра, которое ещё нельзя применить (ядро запущено).</summary>
+    private string PendingBinaryPath => BinaryPath + ".new";
     public string ConfigPath { get; }
     public string LogPath { get; }
 
     private Process? _proc;
     private readonly object _lock = new();
+    private readonly SemaphoreSlim _gate = new(1, 1);
     private HttpClient Http { get; } = CreateHttp();
+
+    /// <summary>Имя TUN-адаптера sing-box (см. конфиг: inbound tun, tag tun0).</summary>
+    private const string TunInterfaceName = "tun0";
+
+    /// <summary>Адрес TUN-адаптера из конфига — надёжнее имени, если оно изменится.</summary>
+    private const string TunAddress = "172.19.0.1";
+
+    /// <summary>Сколько раз пробуем поднять ядро за одно подключение.</summary>
+    private const int StartAttempts = 2;
 
     public SingBoxRunner(string? baseDirectory = null)
     {
@@ -58,7 +73,7 @@ public sealed class SingBoxRunner
         {
             try
             {
-                return File.Exists(BinaryPath) && new FileInfo(BinaryPath).Length > 1_000_000;
+                return IsCoreFile(BinaryPath) || IsCoreFile(PendingBinaryPath);
             }
             catch
             {
@@ -67,9 +82,30 @@ public sealed class SingBoxRunner
         }
     }
 
+    private static bool IsCoreFile(string path) =>
+        File.Exists(path) && new FileInfo(path).Length > 1_000_000;
+
+    /// <summary>Применить скачанное обновление, если ядро не запущено.</summary>
+    private void ApplyPendingCoreUpdate()
+    {
+        try
+        {
+            if (!File.Exists(PendingBinaryPath) || IsCoreRunning) return;
+            File.Move(PendingBinaryPath, BinaryPath, true);
+            Log?.Invoke("ядро sing-box обновлено");
+        }
+        catch (Exception ex)
+        {
+            Log?.Invoke($"не удалось применить обновление ядра: {ex.Message}");
+        }
+    }
+
     public bool IsRunning
     {
-        get { lock (_lock) return _proc is { HasExited: false }; }
+        get
+        {
+            lock (_lock) return _proc is not null && !SafeHasExited(_proc);
+        }
     }
 
     /// <summary>Ключ, под которым работает обход прямо сейчас (для статуса).</summary>
@@ -97,12 +133,21 @@ public sealed class SingBoxRunner
             foreach (var entry in archive.Entries)
             {
                 if (!entry.FullName.EndsWith("sing-box.exe", StringComparison.OrdinalIgnoreCase)) continue;
-                entry.ExtractToFile(BinaryPath, true);
+                // Распаковываем рядом: работающий sing-box.exe нельзя перезаписать.
+                entry.ExtractToFile(PendingBinaryPath, true);
                 found = true;
                 break;
             }
             if (!found) throw new InvalidOperationException("в архиве нет sing-box.exe");
 
+            // Ядро запущено — обновление применится сразу после отключения VPN.
+            if (IsCoreRunning)
+            {
+                Log?.Invoke("ядро sing-box запущено — новая версия применится после отключения VPN");
+                return true;
+            }
+
+            ApplyPendingCoreUpdate();
             Log?.Invoke($"sing-box установлен: {BinaryPath}");
             return true;
         }
@@ -167,8 +212,23 @@ public sealed class SingBoxRunner
 
     /// <summary>
     /// Подключение по ключу: собирает конфиг, снимает оставшийся процесс и запускает ядро.
+    /// Подключение и отключение сериализованы: раньше одновременные клики могли
+    /// отправить мягкий останов новому ядру и уронить уже запущенное.
     /// </summary>
     public async Task<ConnectResult> ConnectAsync(VpnKey key, VpnRoutingConfig routing, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return await ConnectCoreAsync(key, routing, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task<ConnectResult> ConnectCoreAsync(VpnKey key, VpnRoutingConfig routing, CancellationToken ct)
     {
         try
         {
@@ -178,61 +238,75 @@ public sealed class SingBoxRunner
             if (!WindowsRouteManager.IsElevated())
                 return new ConnectResult(false, "нужны права администратора (VPN-адаптер) — запустите программу от администратора");
 
-            if (!IsInstalled)
+            // Снимаем прежнее ядро и ждём, пока освободятся TUN и порт управления.
+            // Иначе новое ядро открывает tun0 поверх ещё не удалённого и падает.
+            await StopLeftoverCoreAsync(ct).ConfigureAwait(false);
+
+            if (!IsCoreFile(BinaryPath))
             {
                 Log?.Invoke("ядро sing-box не установлено — скачиваю…");
                 if (!await InstallAsync(ct).ConfigureAwait(false))
                     return new ConnectResult(false, "ядро не установлено — проверьте интернет и повторите");
+                ApplyPendingCoreUpdate();
+                if (!IsCoreFile(BinaryPath))
+                    return new ConnectResult(false, "не удалось установить ядро sing-box");
             }
-
-            StopLeftoverCore();
 
             string json = SingBoxConfigBuilder.Build(key, routing, LogPath);
             Directory.CreateDirectory(BaseDirectory);
             await File.WriteAllTextAsync(ConfigPath, json, ct).ConfigureAwait(false);
 
-            // ядро пишёт журнал в LogPath само — не перехватываем его пайпы,
-            // чтобы консоль (CLI/PowerShell) не ждала завершения ядра.
-            // Ядро — самостоятельный процесс в отдельном скрытом консольном окне:
-            // когда подключающий процесс (CLI) завершится, ядро продолжит работать.
-            var info = new ProcessStartInfo
+            string lastReason = "";
+            for (int attempt = 1; attempt <= StartAttempts; attempt++)
             {
-                FileName = BinaryPath,
-                Arguments = $"run -c \"{ConfigPath}\"",
-                WorkingDirectory = CoreDirectory,
-                UseShellExecute = true,
-                WindowStyle = ProcessWindowStyle.Hidden
-            };
+                ct.ThrowIfCancellationRequested();
 
-            var proc = new Process { StartInfo = info, EnableRaisingEvents = true };
-            proc.Exited += (_, _) => { lock (_lock) if (_proc == proc) { CleanRef(); Log?.Invoke("ядро sing-box завершило работу"); } };
+                var proc = CreateCoreProcess();
+                try
+                {
+                    proc.Start();
+                }
+                catch (Exception ex)
+                {
+                    proc.Dispose();
+                    return new ConnectResult(false, $"не удалось запустить sing-box: {ex.Message}");
+                }
 
-            proc.Start();
-            lock (_lock) _proc = proc;
+                lock (_lock) _proc = proc;
+                // Подписываемся сразу: ядро может упасть ещё во время ожидания
+                // готовности, и мы должны увидеть это событие.
+                proc.Exited += OnCoreExited;
 
-            // Ждём, пока ядро поднимет TUN и службу управления: на полном реестре
-            // доменов разбор конфига занимает несколько секунд, фиксированные 3 с
-            // могли вернуть «успех» уже упавшему ядру.
-            bool ready = await WaitForCoreReadyAsync(proc, ct).ConfigureAwait(false);
-            if (!ready)
-            {
-                lock (_lock) if (_proc == proc) _proc = null;
-                try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); } catch { }
+                bool ready = await WaitForCoreReadyAsync(proc, ct).ConfigureAwait(false);
+                if (ready)
+                {
+                    ActiveKey = key;
+                    Log?.Invoke($"VPN по ключу работает: \"{key.Name}\" ({key.Protocol} {key.Address}:{key.Port}\u00a0режим {(routing.Mode == "full" ? "весь трафик" : "только выбранные")})");
+                    return new ConnectResult(true);
+                }
+
+                // Причина из журнала ядра, затем чистим процесс и TUN перед повтором.
                 string tail = ReadLogTail();
-                string reason = tail.Contains("actively refused", StringComparison.OrdinalIgnoreCase)
+                lastReason = tail.Contains("actively refused", StringComparison.OrdinalIgnoreCase)
                     || tail.Contains("connection refused", StringComparison.OrdinalIgnoreCase)
                     ? "сервер ключа отклонил соединение — локация недоступна или сервер выключен"
                     : $"ядро не смогло запуститься ({key.Protocol} {key.Address}:{key.Port}).{tail}";
-                return new ConnectResult(false, reason);
+
+                lock (_lock) if (_proc == proc) _proc = null;
+                await KillCoreAsync(proc).ConfigureAwait(false);
+
+                if (attempt < StartAttempts)
+                {
+                    Log?.Invoke($"ядро не поднялось с попытки {attempt} — повторяю");
+                    await Task.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+                }
             }
 
-            ActiveKey = key;
-            Log?.Invoke($"VPN по ключу работает: \"{key.Name}\" ({key.Protocol} {key.Address}:{key.Port}\u00a0режим {(routing.Mode == "full" ? "весь трафик" : "только выбранные")})");
-            return new ConnectResult(true);
+            return new ConnectResult(false, lastReason);
         }
         catch (OperationCanceledException)
         {
-            await DisconnectAsync().ConfigureAwait(false);
+            await DisconnectCoreAsync().ConfigureAwait(false);
             throw;
         }
         catch (Exception ex)
@@ -241,39 +315,158 @@ public sealed class SingBoxRunner
         }
     }
 
-    private void CleanRef()
+    private Process CreateCoreProcess()
     {
-        _proc = null;
-        ActiveKey = null;
+        // ядро пишет журнал в LogPath само — не перехватываем его пайпы,
+        // чтобы консоль (CLI/PowerShell) не ждала завершения ядра.
+        // Ядро — самостоятельный процесс в отдельном скрытом консольном окне:
+        // когда подключающий процесс (CLI) завершится, ядро продолжит работать.
+        var info = new ProcessStartInfo
+        {
+            FileName = BinaryPath,
+            Arguments = $"run -c \"{ConfigPath}\"",
+            WorkingDirectory = CoreDirectory,
+            UseShellExecute = true,
+            WindowStyle = ProcessWindowStyle.Hidden
+        };
+        return new Process { StartInfo = info, EnableRaisingEvents = true };
     }
 
-    /// <summary>Ждём ответа службы управления sing-box — значит, ядро реально запустилось.</summary>
-    private static async Task<bool> WaitForCoreReadyAsync(Process proc, CancellationToken ct)
+    private void OnCoreExited(object? sender, EventArgs e)
+    {
+        if (sender is not Process proc) return;
+
+        bool notify;
+        lock (_lock)
+        {
+            notify = _proc == proc;
+            if (notify)
+            {
+                _proc = null;
+                ActiveKey = null;
+            }
+        }
+        if (notify) Log?.Invoke("ядро sing-box завершило работу");
+    }
+
+    /// <summary>
+    /// Ждём, пока ядро поднимет TUN и службу управления. Таймаут — это неудача:
+    /// раньше он возвращал «успех» живому, но ещё не готовому ядру.
+    /// </summary>
+    private async Task<bool> WaitForCoreReadyAsync(Process proc, CancellationToken ct)
     {
         using var handler = new SocketsHttpHandler { UseProxy = false, ConnectTimeout = TimeSpan.FromMilliseconds(500) };
         using var http = new HttpClient(handler) { Timeout = TimeSpan.FromMilliseconds(700) };
-        var deadline = DateTime.UtcNow.AddSeconds(15);
+        var deadline = DateTime.UtcNow + StartTimeout();
+        bool apiReady = false;
 
         while (DateTime.UtcNow < deadline)
         {
-            if (proc.HasExited) return false;
-            try
+            if (SafeHasExited(proc)) return false;
+
+            if (!apiReady)
             {
-                using var resp = await http.GetAsync(
-                    $"http://127.0.0.1:{SingBoxConfigBuilder.ControlPort}/version", ct).ConfigureAwait(false);
-                if (resp.IsSuccessStatusCode) return true;
+                try
+                {
+                    using var resp = await http.GetAsync(
+                        $"http://127.0.0.1:{SingBoxConfigBuilder.ControlPort}/version", ct).ConfigureAwait(false);
+                    if (resp.IsSuccessStatusCode) apiReady = true;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch
+                {
+                    // ядро ещё стартует
+                }
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+
+            // Готовность — это и служба управления, и поднятый TUN: служба может
+            // ответить раньше, чем ядро откроет адаптер, а без TUN трафик не идёт.
+            if (apiReady && TunInterfaceUp())
             {
-                throw;
+                // Короткая стабилизация: ядро не должно упасть сразу после старта.
+                await Task.Delay(400, ct).ConfigureAwait(false);
+                return !SafeHasExited(proc);
             }
-            catch
-            {
-                // ядро ещё стартует
-            }
+
             await Task.Delay(200, ct).ConfigureAwait(false);
         }
-        return !proc.HasExited;
+
+        return false;
+    }
+
+    /// <summary>Таймаут готовности зависит от размера конфига: полный реестр РКН большой.</summary>
+    private TimeSpan StartTimeout()
+    {
+        long size = 0;
+        try { size = new FileInfo(ConfigPath).Length; } catch { }
+
+        double seconds = 20;
+        if (size > 20 * 1024 * 1024) seconds += 25;
+        else if (size > 5 * 1024 * 1024) seconds += 15;
+        return TimeSpan.FromSeconds(seconds);
+    }
+
+    private static bool SafeHasExited(Process? proc)
+    {
+        try { return proc is null || proc.HasExited; }
+        catch { return true; }
+    }
+
+    /// <summary>Убить ядро, дождаться выхода и освобождения TUN.</summary>
+    private static async Task KillCoreAsync(Process proc)
+    {
+        try { if (!SafeHasExited(proc)) proc.Kill(entireProcessTree: true); } catch { }
+        await WaitForExitAsync(proc, TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+        try { proc.Dispose(); } catch { }
+        await WaitForTunGoneAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+    }
+
+    private static async Task WaitForExitAsync(Process proc, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (SafeHasExited(proc)) return;
+            await Task.Delay(100).ConfigureAwait(false);
+        }
+    }
+
+    private static bool TunInterfaceUp() =>
+        NetworkInterfaces().Any(n =>
+            n.OperationalStatus == OperationalStatus.Up && (IsOurTun(n) || HasOurTunAddress(n)));
+
+    private static bool HasOurTunAddress(NetworkInterface n)
+    {
+        try
+        {
+            return n.GetIPProperties().UnicastAddresses
+                .Any(a => a.Address.ToString() == TunAddress);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static IEnumerable<NetworkInterface> NetworkInterfaces()
+    {
+        try { return NetworkInterface.GetAllNetworkInterfaces(); }
+        catch { return []; }
+    }
+
+    private static bool IsOurTun(NetworkInterface n) =>
+        n.Name.Equals(TunInterfaceName, StringComparison.OrdinalIgnoreCase) ||
+        n.Description.Contains("sing-tun", StringComparison.OrdinalIgnoreCase) ||
+        n.Description.Contains("wintun", StringComparison.OrdinalIgnoreCase);
+
+    private static async Task WaitForTunGoneAsync(TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline && TunInterfaceUp())
+            await Task.Delay(150).ConfigureAwait(false);
     }
 
     private static string? Validate(VpnKey key)
@@ -293,19 +486,33 @@ public sealed class SingBoxRunner
 
     /// <summary>
     /// Мягкая остановка через службу управления sing-box (ядро само снимает маршруты);
-    /// если не сработало — завершаем процесс.
+    /// если не сработало — завершаем процесс. Отключение сериализовано с подключением:
+    /// иначе «мягкий останов» мог уйти только что запущенному ядру.
     /// </summary>
     public async Task DisconnectAsync()
     {
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await DisconnectCoreAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task DisconnectCoreAsync()
+    {
         Process? proc;
-        bool orphan;
         lock (_lock)
         {
             proc = _proc;
             _proc = null;
             ActiveKey = null;
         }
-        orphan = proc is null && FindOurCoreProcesses().Length > 0;
+
+        bool orphan = proc is null && FindOurCoreProcesses().Length > 0;
         if (proc is null && !orphan) return;
 
         Log?.Invoke("остановка VPN по ключу…");
@@ -323,37 +530,51 @@ public sealed class SingBoxRunner
 
         if (proc is not null)
         {
-            try
-            {
-                // /shutdown поддерживают не все версии sing-box (в 1.14 — 404).
-                // Если мягкий останов недоступен, не ждём 5 секунд впустую.
-                if (!proc.HasExited && !proc.WaitForExit(softStop ? 5000 : 0))
-                    proc.Kill(entireProcessTree: true);
-                proc.Dispose();
-            }
-            catch { }
+            // /shutdown поддерживают не все версии sing-box (в 1.14 — 404).
+            // Если мягкий останов недоступен, не ждём 5 секунд впустую.
+            if (softStop) await WaitForExitAsync(proc, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            await KillCoreAsync(proc).ConfigureAwait(false);
         }
 
-        StopLeftoverCore();
+        await StopLeftoverCoreAsync(CancellationToken.None).ConfigureAwait(false);
         Log?.Invoke("VPN по ключу отключён");
     }
 
-    /// <summary>Снимает sing-box-процессы, оставшиеся от прежнего запуска.</summary>
-    public void StopLeftoverCore()
+    /// <summary>
+    /// Снимает sing-box-процессы, оставшиеся от прежнего запуска, и ждёт, пока
+    /// освободятся TUN-адаптер и порт управления. Без этого новое ядро открывает
+    /// tun0 поверх ещё не удалённого и завершается через пару секунд после старта.
+    /// </summary>
+    private async Task StopLeftoverCoreAsync(CancellationToken ct)
     {
-        foreach (var orphan in FindOurCoreProcesses())
+        var orphans = FindOurCoreProcesses();
+        foreach (var orphan in orphans)
         {
             try
             {
-                orphan.Kill(entireProcessTree: true);
-                Log?.Invoke($"снят оставшийся процесс sing-box (PID {orphan.Id})");
+                if (!SafeHasExited(orphan))
+                {
+                    orphan.Kill(entireProcessTree: true);
+                    Log?.Invoke($"снят оставшийся процесс sing-box (PID {orphan.Id})");
+                }
             }
             catch { }
-            finally
-            {
-                try { orphan.Dispose(); } catch { }
-            }
         }
+
+        foreach (var orphan in orphans)
+        {
+            await WaitForExitAsync(orphan, TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+            try { orphan.Dispose(); } catch { }
+        }
+
+        if (orphans.Length > 0)
+        {
+            await WaitForTunGoneAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            // Ядро снимает адаптер не мгновенно после выхода процесса.
+            try { await Task.Delay(300, ct).ConfigureAwait(false); } catch (OperationCanceledException) { }
+        }
+
+        ApplyPendingCoreUpdate();
     }
 
     /// <summary>Наши процессы ядра (наша папка core или без пути — честно «свои»).</summary>
@@ -368,7 +589,9 @@ public sealed class SingBoxRunner
                     {
                         string path = "";
                         try { path = p.MainModule?.FileName ?? ""; } catch { }
-                        return path.Length == 0 || path.StartsWith(CoreDirectory, StringComparison.OrdinalIgnoreCase);
+                        return path.Length == 0
+                            || path.Equals(BinaryPath, StringComparison.OrdinalIgnoreCase)
+                            || path.StartsWith(CoreDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
                     }
                     catch
                     {
