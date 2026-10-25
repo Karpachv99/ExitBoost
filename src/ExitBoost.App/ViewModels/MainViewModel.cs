@@ -49,6 +49,9 @@ public sealed class MainViewModel : ObservableObject
     private string _searchText = "";
     private bool _isBusy;
     private DateTime? _connectedAt;
+    private int _selectedPageIndex;
+    private string _statDownloadText = "—";
+    private string _statUploadText = "—";
 
     public MainViewModel()
     {
@@ -106,6 +109,8 @@ public sealed class MainViewModel : ObservableObject
             return Task.CompletedTask;
         });
         SpeedTestCommand = new RelayCommand(_ => RunSpeedTestAsync(), _ => !IsSpeedTestRunning);
+        NavigateCommand = new RelayCommand(p => { NavigateTo(p); return Task.CompletedTask; });
+        QuickServiceCommand = new RelayCommand(p => { AddQuickService(p); return Task.CompletedTask; });
 
         _probing.StatusUpdated += OnStatusUpdated;
         _log.EntryAdded += OnLogEntry;
@@ -122,6 +127,10 @@ public sealed class MainViewModel : ObservableObject
         VpnKeysView = CollectionViewSource.GetDefaultView(VpnKeyRows);
         VpnKeysView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(VpnKeyItemViewModel.Group)));
         VpnKeysView.SortDescriptions.Add(new SortDescription(nameof(VpnKeyItemViewModel.Group), ListSortDirection.Ascending));
+        DpiGameStrategiesView = new ListCollectionView(DpiStrategies)
+        {
+            Filter = o => o is DpiStrategyItemViewModel item && item.IsGame
+        };
 
         _uiTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _uiTimer.Tick += (_, _) => Tick();
@@ -183,7 +192,37 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand VpnInstallCoreCommand { get; }
     public RelayCommand SpeedTestCommand { get; }
 
+    /// <summary>Переход на страницу по номеру (0 — главная, 1 — локации, 2 — игры, 3 — DPI, 4 — журнал, 5 — настройки).</summary>
+    public RelayCommand NavigateCommand { get; }
+
+    /// <summary>Быстрое добавление сервиса в список VPN (параметр — домены через «|»).</summary>
+    public RelayCommand QuickServiceCommand { get; }
+
     // ---------------------------------------------------------- свойства
+
+    /// <summary>Выбранная страница в боковом меню.</summary>
+    public int SelectedPageIndex
+    {
+        get => _selectedPageIndex;
+        set => Set(ref _selectedPageIndex, value);
+    }
+
+    /// <summary>Последний результат теста скорости: скачивание.</summary>
+    public string StatDownloadText
+    {
+        get => _statDownloadText;
+        private set => Set(ref _statDownloadText, value);
+    }
+
+    /// <summary>Последний результат теста скорости: отдача.</summary>
+    public string StatUploadText
+    {
+        get => _statUploadText;
+        private set => Set(ref _statUploadText, value);
+    }
+
+    /// <summary>Только игровые стратегии — для страницы «Игры и сервисы».</summary>
+    public ICollectionView DpiGameStrategiesView { get; }
 
     public NodeItemViewModel? SelectedNode
     {
@@ -813,8 +852,15 @@ public sealed class MainViewModel : ObservableObject
     public string StateText
     {
         get => _stateText;
-        internal set => Set(ref _stateText, value);
+        internal set
+        {
+            if (!Set(ref _stateText, value)) return;
+            OnPropertyChanged(nameof(StateTextUpper));
+        }
     }
+
+    /// <summary>Крупная надпись под кнопкой питания — всегда заглавными.</summary>
+    public string StateTextUpper => StateText.ToUpperInvariant();
 
     public string StateColor
     {
@@ -1562,6 +1608,18 @@ public sealed class MainViewModel : ObservableObject
 
             FillDpiStrategies(App.ZapretCatalog);
 
+            // В игровом режиме перебираем только игровые профили: сайтовые
+            // стратегии работают по hostlist и к IP/портам игры неприменимы.
+            IReadOnlyList<DpiStrategy> candidates = target.IsGameMode
+                ? App.ZapretCatalog.Strategies.Where(s => s.IsGame).ToList()
+                : App.ZapretCatalog.Strategies;
+            if (candidates.Count == 0)
+            {
+                DpiBestText = "В каталоге нет игровых стратегий";
+                DpiProgressText = "Игровые стратегии не найдены";
+                return;
+            }
+
             var items = DpiStrategies.ToDictionary(i => i.Strategy.Id, i => i);
             var progress = new Progress<DpiStrategyResult>(r =>
             {
@@ -1571,7 +1629,7 @@ public sealed class MainViewModel : ObservableObject
 
             DpiProgressText = $"Перебор стратегий zapret (заблокировано: {blocked.Count})...";
             var results = await App.DpiOptimizer
-                .OptimizeAsync(App.ZapretCatalog.Strategies, target, 2, progress, hosts: blocked)
+                .OptimizeAsync(candidates, target, 2, progress, hosts: blocked)
                 .ConfigureAwait(true);
 
             foreach (var r in results)
@@ -2081,6 +2139,32 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(VpnProgramsSummary));
     }
 
+    /// <summary>Переход между страницами бокового меню.</summary>
+    private void NavigateTo(object? parameter)
+    {
+        if (parameter is null) return;
+        if (!int.TryParse(parameter.ToString(), out int page)) return;
+        SelectedPageIndex = Math.Clamp(page, 0, 5);
+    }
+
+    /// <summary>
+    /// Плитка «популярные сервисы»: добавляет домены в список VPN
+    /// и переключает режим на «только выбранные сайты и программы».
+    /// </summary>
+    private void AddQuickService(object? parameter)
+    {
+        if (parameter is not string raw || raw.Length == 0) return;
+
+        string[] domains = raw.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (string domain in domains) AddVpnSite(domain);
+
+        if (VpnModeIsFull) VpnModeIsSplit = true;
+
+        string names = string.Join(", ", domains);
+        StatusText = $"В список VPN добавлено: {names}. Переподключите VPN, чтобы применить.";
+        _log.Info("Быстрое действие: в список VPN добавлено " + names);
+    }
+
     private static readonly string[] DefaultVpnDomains =
         ["youtube.com", "discord.com", "discord.gg", "googlevideo.com", "chatgpt.com", "openai.com"];
 
@@ -2290,19 +2374,23 @@ public sealed class MainViewModel : ObservableObject
 
         if (running)
         {
+            _connectedAt ??= DateTime.UtcNow;
+
+            // Окно открылось при уже работающем VPN: подставляем активный ключ,
+            // чтобы шапка и кнопка питания показывали реальную локацию.
+            if (SelectedVpnKey is null && App.Vpn.ActiveKey is not null)
+                SelectedVpnKey = VpnKeyRows.FirstOrDefault(k => k.Id == App.Vpn.ActiveKey.Id);
+
             VpnStatusText = App.Vpn.ActiveKey is null
                 ? "VPN работает"
                 : $"VPN работает: {App.Vpn.ActiveKey.Name}";
             VpnStatusColor = "#2FBF71";
 
             // Шапка приложения показывает то же состояние.
-            if (StateText != "Подключение")
-            {
-                StateText = "Подключено";
-                StateColor = "#2FBF71";
-                StatusText = $"Подключено к {App.Vpn.ActiveKey?.Name ?? "VPN"}";
-                InterfaceText = "VPN";
-            }
+            StateText = "Подключено";
+            StateColor = "#2FBF71";
+            StatusText = $"Подключено к {App.Vpn.ActiveKey?.Name ?? "VPN"}";
+            InterfaceText = "VPN";
         }
         else if (_vpnStatusText.StartsWith("ошибка"))
         {
@@ -2312,6 +2400,16 @@ public sealed class MainViewModel : ObservableObject
         {
             VpnStatusText = "не активен";
             VpnStatusColor = "#8C95A6";
+
+            // Ядро остановилось (в том числе вручную) — таймер соединения больше не тикает.
+            if (StateText is "Подключено" or "Подключение")
+            {
+                StateText = "Отключено";
+                StateColor = "#8C95A6";
+                _connectedAt = null;
+                ElapsedText = "00:00:00";
+                InterfaceText = "—";
+            }
         }
 
         RefreshHeaderKeyText();
@@ -2331,6 +2429,16 @@ public sealed class MainViewModel : ObservableObject
             SpeedTestText = result.Ok
                 ? "скорость: " + result.Text
                 : "тест скорости — " + result.Text;
+            if (result.Ok)
+            {
+                StatDownloadText = $"{result.DownloadMbps:0.0} Мбит/с";
+                StatUploadText = $"{result.UploadMbps:0.0} Мбит/с";
+            }
+            else
+            {
+                StatDownloadText = "—";
+                StatUploadText = "—";
+            }
             _log.Info("Тест скорости: " + result.Text);
         }
         catch (Exception ex)

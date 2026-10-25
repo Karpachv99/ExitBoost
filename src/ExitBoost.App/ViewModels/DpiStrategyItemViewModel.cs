@@ -20,6 +20,12 @@ public sealed class DpiStrategyItemViewModel : ObservableObject
 
     public string Source => Strategy.Source;
 
+    /// <summary>Стратегия для игрового профиля (IP/порты игры), а не для сайтов.</summary>
+    public bool IsGame => Strategy.IsGame;
+
+    /// <summary>Короткая пометка для таблицы стратегий.</summary>
+    public string Kind => IsGame ? "Игры" : "Сайты";
+
     private bool _success;
     private string _result = "не проверена";
     private double _score;

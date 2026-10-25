@@ -7,9 +7,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>ExitBoost.Updater</AssemblyName>
     <RootNamespace>ExitBoost.Updater</RootNamespace>
-    <Version>1.0.22</Version>
-    <AssemblyVersion>1.0.22.0</AssemblyVersion>
-    <FileVersion>1.0.22.0</FileVersion>
+    <Version>1.0.23</Version>
+    <AssemblyVersion>1.0.23.0</AssemblyVersion>
+    <FileVersion>1.0.23.0</FileVersion>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>

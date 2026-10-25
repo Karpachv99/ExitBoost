@@ -1,8 +1,10 @@
 ﻿using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using ExitBoost.App.ViewModels;
 using ExitBoost.Core.Models;
@@ -33,6 +35,25 @@ public partial class MainWindow : Window
             // проверка обновлений не должна мешать запуску
         }
     }
+
+    /// <summary>Тёмный заголовок окна в стиле нового интерфейса (Windows 10 1809+).</summary>
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        try
+        {
+            IntPtr hwnd = new WindowInteropHelper(this).Handle;
+            int enabled = 1;
+            DwmSetWindowAttribute(hwnd, 20, ref enabled, sizeof(int)); // DWMWA_USE_IMMERSIVE_DARK_MODE
+        }
+        catch
+        {
+            // на старых сборках Windows атрибут недоступен — это не критично
+        }
+    }
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
 
     private void OnFullTunnelClick(object sender, RoutedEventArgs e) => _viewModel.Mode = RoutingMode.FullTunnel;
 

@@ -4,7 +4,7 @@
         xmlns:controls="clr-namespace:ExitBoost.App.Controls"
         xmlns:conv="clr-namespace:ExitBoost.App.Converters"
         Title="ExitBoost — игровой бустер"
-        Height="740" Width="1200" MinHeight="620" MinWidth="1000"
+        Height="820" Width="1280" MinHeight="680" MinWidth="1100"
         Background="{StaticResource BgBrush}"
         Foreground="{StaticResource TextBrush}"
         FontFamily="Segoe UI"
@@ -14,6 +14,7 @@
     <Window.Resources>
         <conv:StringToBrushConverter x:Key="StringToBrush" />
         <conv:CountryToFlagConverter x:Key="CountryToFlag" />
+        <conv:InverseBoolToVisibilityConverter x:Key="InverseBoolToVis" />
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
 
         <!-- Выпадающий список с поиском прямо внутри выпадающего списка -->
@@ -105,245 +106,1256 @@
     </Window.Resources>
 
     <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
-        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="224" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
 
-        <!-- ==== Шапка ==== -->
-        <Border Grid.Row="0" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
-            <Grid Margin="18,12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
+        <!-- ==================== Боковое меню ==================== -->
+        <Border Grid.Column="0" Background="{StaticResource SidebarBrush}"
+                BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="0,0,1,0">
+            <Grid Margin="14,18,14,14">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
 
-                <Border Grid.Column="0" Width="36" Height="36" CornerRadius="10" Background="{StaticResource AccentBrush}">
-                    <TextBlock Text="⚡" FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                </Border>
-
-                <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
-                    <TextBlock Text="ExitBoost" FontSize="16" FontWeight="SemiBold" />
-                    <TextBlock Text="VPN по ключу, ускорение игр и обход DPI" FontSize="10.5" Foreground="{StaticResource MutedBrush}" />
+                <StackPanel Grid.Row="0" Orientation="Horizontal">
+                    <Border Width="40" Height="40" CornerRadius="11">
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                <GradientStop Color="#4C8DFF" Offset="0" />
+                                <GradientStop Color="#2C5FD1" Offset="1" />
+                            </LinearGradientBrush>
+                        </Border.Background>
+                        <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE945;" FontSize="20"
+                                   Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="ExitBoost" FontSize="17" FontWeight="Bold" />
+                        <TextBlock Text="GAME BOOSTER" FontSize="8.5" Foreground="{StaticResource MutedBrush}" />
+                    </StackPanel>
                 </StackPanel>
 
-                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border Background="{StaticResource PanelAltBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                            CornerRadius="14" Padding="12,5" Margin="0,0,14,0"
-                            ToolTip="Работает ли обход DPI (zapret) прямо сейчас. Управление — на вкладке «Обход DPI».">
+                <ListBox x:Name="Nav" Grid.Row="1" Margin="0,22,0,0"
+                         SelectedIndex="{Binding SelectedPageIndex, Mode=TwoWay}"
+                         ItemContainerStyle="{StaticResource NavItem}"
+                         Background="Transparent" BorderThickness="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBoxItem>
                         <StackPanel Orientation="Horizontal">
-                            <Ellipse Width="7" Height="7" Fill="{Binding DpiActiveColor, Converter={StaticResource StringToBrush}}" Margin="0,0,7,0" VerticalAlignment="Center" />
-                            <TextBlock Text="{Binding DpiActiveText}" FontSize="12" FontWeight="SemiBold"
-                                       Foreground="{Binding DpiActiveColor, Converter={StaticResource StringToBrush}}" />
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE80F;" FontSize="15"
+                                       Width="26" VerticalAlignment="Center" />
+                            <TextBlock Text="Главная" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE707;" FontSize="15"
+                                       Width="26" VerticalAlignment="Center" />
+                            <TextBlock Text="Локации" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE7FC;" FontSize="15"
+                                       Width="26" VerticalAlignment="Center" />
+                            <TextBlock Text="Игры и сервисы" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72E;" FontSize="15"
+                                       Width="26" VerticalAlignment="Center" />
+                            <TextBlock Text="Обход DPI" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE81C;" FontSize="15"
+                                       Width="26" VerticalAlignment="Center" />
+                            <TextBlock Text="Журнал" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE713;" FontSize="15"
+                                       Width="26" VerticalAlignment="Center" />
+                            <TextBlock Text="Настройки" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </ListBoxItem>
+                </ListBox>
+
+                <StackPanel Grid.Row="3">
+                    <Border Style="{StaticResource Pill}" Padding="10,7" Margin="0,0,0,10">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="7" Height="7" Margin="0,0,7,0" VerticalAlignment="Center"
+                                     Fill="{Binding DpiActiveColor, Converter={StaticResource StringToBrush}}" />
+                            <TextBlock Text="{Binding DpiActiveText}" FontSize="10.5" TextWrapping="Wrap"
+                                       MaxWidth="160" />
                         </StackPanel>
                     </Border>
-
-                    <Border Background="{StaticResource PanelAltBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                            CornerRadius="14" Padding="12,5" Margin="0,0,14,0"
-                            ToolTip="Ключ, через который идёт трафик (в названии ключа — его локация)">
-                        <StackPanel Orientation="Horizontal">
-                            <Ellipse Width="7" Height="7" Fill="{Binding StateColor, Converter={StaticResource StringToBrush}}" Margin="0,0,7,0" VerticalAlignment="Center" />
-                            <TextBlock FontSize="12" FontWeight="SemiBold" MaxWidth="320" TextTrimming="CharacterEllipsis"
-                                       Foreground="{Binding StateColor, Converter={StaticResource StringToBrush}}">
-                                <Run Text="Ключ: " Foreground="{StaticResource MutedBrush}" />
-                                <Run Text="{Binding HeaderKeyText, Mode=OneWay}" />
-                            </TextBlock>
-                        </StackPanel>
-                    </Border>
-
-                    <Border Background="{StaticResource PanelAltBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                            CornerRadius="14" Padding="12,5" Margin="0,0,14,0">
-                        <StackPanel Orientation="Horizontal">
-                            <Ellipse Width="7" Height="7" Fill="{Binding StateColor, Converter={StaticResource StringToBrush}}" Margin="0,0,7,0" VerticalAlignment="Center" />
-                            <TextBlock Text="{Binding StateText}" FontSize="12" FontWeight="SemiBold"
-                                       Foreground="{Binding StateColor, Converter={StaticResource StringToBrush}}" />
-                        </StackPanel>
-                    </Border>
-
-                    <Button Content="Починить интернет" Command="{Binding RestoreNetworkCommand}" Margin="0,0,0,0"
-                            ToolTip="Если подключение приложения сломало интернет — снимет туннель, вернёт маршруты, очистит DNS-кэш и проверит фактический доступ в сеть." />
+                    <Button Content="Починить интернет" Command="{Binding RestoreNetworkCommand}"
+                            HorizontalAlignment="Stretch"
+                            ToolTip="Снять туннель, вернуть маршруты, очистить DNS-кэш и проверить доступ в сеть" />
+                    <TextBlock Text="{Binding CurrentVersionText}" Style="{StaticResource Muted}"
+                               HorizontalAlignment="Center" Margin="0,10,0,0" />
                 </StackPanel>
             </Grid>
         </Border>
 
-        <!-- ==== Основная область ==== -->
-        <Grid Grid.Row="1">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="520" MinWidth="360" MaxWidth="1100" />
-                <ColumnDefinition Width="6" />
-                <ColumnDefinition Width="*" MinWidth="480" />
-            </Grid.ColumnDefinitions>
+        <!-- ==================== Правая часть ==================== -->
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
 
-            <!-- ==== Панель серверов ==== -->
-            <Border Grid.Column="0" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
-                <Grid Margin="16">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
+            <!-- Шапка: выбранная локация и статусы -->
+            <Border Grid.Row="0" Background="#0B0F17"
+                    BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="0,0,0,1">
+                <Grid Margin="24,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
 
-                    <!-- ==== VPN-ключи — это и есть точки доступа (ретрансляторы) ==== -->
-                    <Grid Grid.Row="0" Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Style="{StaticResource H2}" Text="Локации" />
-                            <Border Background="{StaticResource PanelAltBrush}" CornerRadius="9" Padding="7,1" Margin="8,0,0,0" VerticalAlignment="Center">
-                                <TextBlock Text="{Binding VpnKeyCount}" FontSize="11" Foreground="{StaticResource MutedBrush}" />
-                            </Border>
-                        </StackPanel>
-                        <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                            <Button Content="Добавить ключ…" Command="{Binding VpnAddKeyCommand}" Margin="0,0,6,0"
-                                    ToolTip="Вставьте ключ vless/vmess/trojan/ss/hysteria2 или ссылку на подписку" />
-                            <Button Content="Удалить" Command="{Binding VpnRemoveKeyCommand}" />
-                        </StackPanel>
+                    <Grid Grid.Column="0" Width="330">
+                        <ComboBox MinHeight="48" ItemsSource="{Binding VpnKeyRows}"
+                                  SelectedItem="{Binding SelectedVpnKey}"
+                                  ToolTip="Быстрый выбор локации. Полный список — на странице «Локации»">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding Flag}" FontSize="20" Margin="0,0,9,0"
+                                                   VerticalAlignment="Center" />
+                                        <StackPanel VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Country}" FontSize="12.5" FontWeight="SemiBold" />
+                                            <TextBlock Text="{Binding Name}" FontSize="10.5"
+                                                       Foreground="{StaticResource MutedBrush}"
+                                                       TextTrimming="CharacterEllipsis" MaxWidth="240" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <TextBlock Text="Выберите локацию" FontSize="12.5" Margin="12,0,0,0"
+                                   VerticalAlignment="Center" IsHitTestVisible="False"
+                                   Foreground="{StaticResource MutedBrush}">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SelectedVpnKey}" Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
                     </Grid>
 
-                    <DataGrid Grid.Row="1"
-                              ItemsSource="{Binding VpnKeysView}"
-                              SelectedItem="{Binding SelectedVpnKey}"
-                              IsReadOnly="True"
-                              CanUserResizeColumns="True"
-                              CanUserSortColumns="True"
-                              EnableRowVirtualization="True"
-                              RowHeight="46"
-                              MouseDoubleClick="VpnKeysGrid_MouseDoubleClick"
-                              ToolTip="Двойной клик по локации или по названию страны — подключить VPN и включить обход DPI"
-                              ScrollViewer.HorizontalScrollBarVisibility="Auto">
-                        <DataGrid.Columns>
-                            <DataGridTemplateColumn Header="Локации" Width="*" MinWidth="240">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <Grid Margin="2,5,2,5"
-                                              ToolTip="{Binding Server}">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-
-                                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                                <StackPanel Orientation="Horizontal">
-                                                    <TextBlock Text="{Binding Flag}" FontSize="14" Margin="0,0,7,0"
-                                                               VerticalAlignment="Center" />
-                                                    <TextBlock Text="{Binding TitleText}" FontSize="13" FontWeight="SemiBold"
-                                                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                                                </StackPanel>
-                                                <TextBlock Text="{Binding DetailsText}" FontSize="11" Margin="21,1,0,0"
-                                                           Foreground="{StaticResource MutedBrush}"
-                                                           TextTrimming="CharacterEllipsis" />
-                                            </StackPanel>
-
-                                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="10,0,6,0">
-                                                <TextBlock Text="{Binding PingText}" FontSize="12" FontWeight="SemiBold"
-                                                           HorizontalAlignment="Right"
-                                                           Foreground="{Binding QualityColor, Converter={StaticResource StringToBrush}}" />
-                                                <TextBlock Text="{Binding Quality}" FontSize="10"
-                                                           HorizontalAlignment="Right"
-                                                           Foreground="{StaticResource MutedBrush}" />
-                                            </StackPanel>
-                                        </Grid>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
-                        </DataGrid.Columns>
-                        <DataGrid.GroupStyle>
-                            <GroupStyle>
-                                <GroupStyle.ContainerStyle>
-                                    <Style TargetType="{x:Type GroupItem}">
-                                        <Setter Property="Template">
-                                            <Setter.Value>
-                                                <ControlTemplate TargetType="{x:Type GroupItem}">
-                                                        <Expander IsExpanded="True" Foreground="{StaticResource TextBrush}"
-                                                                  Background="Transparent" Padding="0,2,0,2">
-                                                            <Expander.Header>
-                                                                <Border Background="{StaticResource PanelBrush}" CornerRadius="8"
-                                                                        Padding="10,7" Margin="0,3,0,5">
-                                                                    <StackPanel Orientation="Horizontal">
-                                                                        <TextBlock Text="▣" FontSize="13" Margin="0,0,8,0"
-                                                                                   Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center" />
-                                                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
-                                                                                   Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" />
-                                                                        <TextBlock Text="{Binding ItemCount, StringFormat='  ({0} ключей)'}"
-                                                                                   Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" />
-                                                                    </StackPanel>
-                                                                </Border>
-                                                            </Expander.Header>
-                                                        <ItemsPresenter />
-                                                    </Expander>
-                                                </ControlTemplate>
-                                            </Setter.Value>
-                                        </Setter>
-                                    </Style>
-                                </GroupStyle.ContainerStyle>
-                            </GroupStyle>
-                        </DataGrid.GroupStyle>
-                    </DataGrid>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border Style="{StaticResource Pill}" Margin="0,0,8,0"
+                                ToolTip="Работает ли обход DPI (zapret) прямо сейчас">
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse Width="7" Height="7" Margin="0,0,7,0" VerticalAlignment="Center"
+                                         Fill="{Binding DpiActiveColor, Converter={StaticResource StringToBrush}}" />
+                                <TextBlock Text="{Binding DpiActiveText}" FontSize="11.5" FontWeight="SemiBold"
+                                           MaxWidth="300" TextTrimming="CharacterEllipsis"
+                                           Foreground="{Binding DpiActiveColor, Converter={StaticResource StringToBrush}}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Pill}"
+                                ToolTip="Состояние подключения">
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse Width="7" Height="7" Margin="0,0,7,0" VerticalAlignment="Center"
+                                         Fill="{Binding StateColor, Converter={StaticResource StringToBrush}}" />
+                                <TextBlock Text="{Binding StateText}" FontSize="11.5" FontWeight="SemiBold"
+                                           Foreground="{Binding StateColor, Converter={StaticResource StringToBrush}}" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
                 </Grid>
             </Border>
 
-            <!-- ==== Разделитель: ширина левой панели меняется мышью ==== -->
-            <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
-                          Background="Transparent" ShowsPreview="False" ResizeBehavior="PreviousAndNext"
-                          ToolTip="Потяните, чтобы сделать список локаций шире или уже" />
+            <!-- Страницы -->
+            <TabControl Grid.Row="1" SelectedIndex="{Binding SelectedPageIndex, Mode=TwoWay}"
+                        Background="Transparent" BorderThickness="0">
+                <TabControl.Template>
+                    <ControlTemplate TargetType="TabControl">
+                        <ContentPresenter ContentSource="SelectedContent" />
+                    </ControlTemplate>
+                </TabControl.Template>
 
-            <!-- ==== Правая панель ==== -->
-            <TabControl Grid.Column="2" Margin="16,12,16,8">
-                <TabItem Header="Подключение">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,12,6,0">
+                <!-- ==================== 0. Главная ==================== -->
+                <TabItem>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24,18,24,20">
                         <StackPanel>
 
-                            <!-- Выбранная точка (VPN-ключ) -->
-                            <Border Background="{StaticResource PanelBrush}" CornerRadius="9" Padding="14" Margin="0,0,0,12">
+                            <!-- Герой-блок с кнопкой питания -->
+                            <Border CornerRadius="16" ClipToBounds="True" Margin="0,0,0,18">
+                                <Border.Background>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                        <GradientStop Color="#0A1220" Offset="0" />
+                                        <GradientStop Color="#0D1728" Offset="0.55" />
+                                        <GradientStop Color="#111C31" Offset="1" />
+                                    </LinearGradientBrush>
+                                </Border.Background>
+                                <Grid MinHeight="340">
+                                    <Ellipse Width="470" Height="470" HorizontalAlignment="Center"
+                                             VerticalAlignment="Center" IsHitTestVisible="False" Opacity="0.55">
+                                        <Ellipse.Fill>
+                                            <RadialGradientBrush>
+                                                <GradientStop Color="#3A3E7BFA" Offset="0" />
+                                                <GradientStop Color="#003E7BFA" Offset="1" />
+                                            </RadialGradientBrush>
+                                        </Ellipse.Fill>
+                                    </Ellipse>
+                                    <Ellipse Width="360" Height="360" HorizontalAlignment="Right"
+                                             VerticalAlignment="Bottom" Margin="0,0,-80,-140"
+                                             IsHitTestVisible="False" Opacity="0.35">
+                                        <Ellipse.Fill>
+                                            <RadialGradientBrush>
+                                                <GradientStop Color="#2A4C8DFF" Offset="0" />
+                                                <GradientStop Color="#004C8DFF" Offset="1" />
+                                            </RadialGradientBrush>
+                                        </Ellipse.Fill>
+                                    </Ellipse>
+
+                                    <Grid Margin="30,20,30,20">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="272" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- Кнопка питания и состояние -->
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                            <Grid HorizontalAlignment="Center" Margin="0,0,0,4">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <StackPanel.Style>
+                                                        <Style TargetType="StackPanel">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding SelectedVpnKey}" Value="{x:Null}">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </StackPanel.Style>
+                                                    <TextBlock Text="{Binding SelectedVpnKey.Flag}" FontSize="18"
+                                                               Margin="0,0,8,0" VerticalAlignment="Center" />
+                                                    <TextBlock Text="{Binding SelectedVpnKey.Country}" FontSize="13"
+                                                               FontWeight="SemiBold" VerticalAlignment="Center" />
+                                                    <TextBlock Text=" · " Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" />
+                                                    <TextBlock Text="{Binding SelectedVpnKey.Name}" FontSize="12"
+                                                               Foreground="{StaticResource MutedBrush}"
+                                                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                                               MaxWidth="280" />
+                                                </StackPanel>
+                                                <TextBlock Text="Локация не выбрана" FontSize="12"
+                                                           Foreground="{StaticResource MutedBrush}"
+                                                           HorizontalAlignment="Center">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding SelectedVpnKey}" Value="{x:Null}">
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </Grid>
+
+                                            <Grid Width="200" Height="200" HorizontalAlignment="Center" Margin="0,2,0,0">
+                                                <Ellipse Width="200" Height="200" Stroke="#1E3A66" StrokeThickness="1"
+                                                         Opacity="0.65" />
+                                                <Button Style="{StaticResource PowerButton}"
+                                                        Command="{Binding ConnectCommand}"
+                                                        HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                        Visibility="{Binding IsVpnRunning, Converter={StaticResource InverseBoolToVis}}"
+                                                        ToolTip="Подключить VPN и обход DPI по выбранной локации">
+                                                    <StackPanel>
+                                                        <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE945;"
+                                                                   FontSize="46" Foreground="White" HorizontalAlignment="Center" />
+                                                        <TextBlock Text="ПОДКЛЮЧИТЬ" FontSize="10" FontWeight="SemiBold"
+                                                                   Foreground="#9FB6DA" HorizontalAlignment="Center"
+                                                                   Margin="0,8,0,0" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Style="{StaticResource PowerButton}"
+                                                        Command="{Binding DisconnectCommand}"
+                                                        HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                        Visibility="{Binding IsVpnRunning, Converter={StaticResource BoolToVis}}"
+                                                        ToolTip="Отключить VPN и остановить обход DPI">
+                                                    <StackPanel>
+                                                        <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE7E8;"
+                                                                   FontSize="42" Foreground="White" HorizontalAlignment="Center" />
+                                                        <TextBlock Text="ОТКЛЮЧИТЬ" FontSize="10" FontWeight="SemiBold"
+                                                                   Foreground="#9FB6DA" HorizontalAlignment="Center"
+                                                                   Margin="0,8,0,0" />
+                                                    </StackPanel>
+                                                </Button>
+                                            </Grid>
+
+                                            <TextBlock Text="{Binding StateTextUpper}" FontSize="23" FontWeight="Bold"
+                                                       HorizontalAlignment="Center" Margin="0,14,0,0"
+                                                       Foreground="{Binding StateColor, Converter={StaticResource StringToBrush}}" />
+                                            <TextBlock Text="{Binding ElapsedText}" FontSize="14"
+                                                       HorizontalAlignment="Center" Margin="0,4,0,0"
+                                                       Foreground="#7C87A0" />
+                                            <TextBlock Text="{Binding StatusText}" FontSize="11"
+                                                       HorizontalAlignment="Center" Margin="0,8,0,0"
+                                                       MaxWidth="430" TextTrimming="CharacterEllipsis"
+                                                       Foreground="{StaticResource MutedBrush}" />
+                                        </StackPanel>
+
+                                        <!-- Статистика -->
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                            <TextBlock Text="СТАТИСТИКА" FontSize="10" FontWeight="SemiBold"
+                                                       Foreground="#5F6E88"
+                                                       Margin="2,0,0,8" />
+
+                                            <Border Style="{StaticResource StatCard}" Margin="0,0,0,10">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border Width="36" Height="36" CornerRadius="9" Background="#16233D"
+                                                            VerticalAlignment="Center">
+                                                        <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE916;"
+                                                                   FontSize="16" Foreground="#6E9BE8"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                    </Border>
+                                                    <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
+                                                        <TextBlock Text="Пинг" FontSize="10.5" Foreground="{StaticResource MutedBrush}" />
+                                                        <TextBlock Text="{Binding SelectedVpnKey.PingText, TargetNullValue=—}"
+                                                                   FontSize="17" FontWeight="Bold" />
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
+
+                                            <Border Style="{StaticResource StatCard}" Margin="0,0,0,10">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border Width="36" Height="36" CornerRadius="9" Background="#16233D"
+                                                            VerticalAlignment="Center">
+                                                        <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE896;"
+                                                                   FontSize="16" Foreground="#6E9BE8"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                    </Border>
+                                                    <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
+                                                        <TextBlock Text="Загрузка" FontSize="10.5" Foreground="{StaticResource MutedBrush}" />
+                                                        <TextBlock Text="{Binding StatDownloadText}"
+                                                                   FontSize="17" FontWeight="Bold" />
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
+
+                                            <Border Style="{StaticResource StatCard}" Margin="0,0,0,10">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border Width="36" Height="36" CornerRadius="9" Background="#16233D"
+                                                            VerticalAlignment="Center">
+                                                        <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE898;"
+                                                                   FontSize="16" Foreground="#6E9BE8"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                    </Border>
+                                                    <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
+                                                        <TextBlock Text="Отдача" FontSize="10.5" Foreground="{StaticResource MutedBrush}" />
+                                                        <TextBlock Text="{Binding StatUploadText}"
+                                                                   FontSize="17" FontWeight="Bold" />
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
+
+                                            <Border Style="{StaticResource StatCard}">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border Width="36" Height="36" CornerRadius="9" Background="#16233D"
+                                                            VerticalAlignment="Center">
+                                                        <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE774;"
+                                                                   FontSize="16" Foreground="#6E9BE8"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                    </Border>
+                                                    <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
+                                                        <TextBlock Text="Протокол" FontSize="10.5" Foreground="{StaticResource MutedBrush}" />
+                                                        <TextBlock Text="{Binding SelectedVpnKey.Protocol, TargetNullValue=—}"
+                                                                   FontSize="17" FontWeight="Bold" />
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
+                                        </StackPanel>
+                                    </Grid>
+                                </Grid>
+                            </Border>
+
+                            <!-- Популярные игры и сервисы -->
+                            <Grid Margin="0,0,0,16">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid Grid.Row="0">
+                                    <TextBlock Text="Популярные игры и сервисы" FontSize="15" FontWeight="SemiBold"
+                                               VerticalAlignment="Center" />
+                                    <Button Content="Все →" Style="{StaticResource LinkButton}" HorizontalAlignment="Right"
+                                            Command="{Binding NavigateCommand}" CommandParameter="2" />
+                                </Grid>
+                                <UniformGrid Grid.Row="1" Columns="6" Margin="0,8,0,0">
+                                    <Button Style="{StaticResource ServiceTile}" Command="{Binding QuickServiceCommand}"
+                                            CommandParameter="steamcommunity.com|store.steampowered.com"
+                                            ToolTip="Добавить Steam в список VPN">
+                                        <StackPanel>
+                                            <Border Width="44" Height="44" CornerRadius="11" Background="#1B2838">
+                                                <TextBlock Text="S" FontSize="21" FontWeight="Bold" Foreground="#C7D5E0"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                            <TextBlock Text="Steam" FontSize="10.5" Foreground="{StaticResource MutedBrush}"
+                                                       HorizontalAlignment="Center" Margin="0,5,0,0" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource ServiceTile}" Command="{Binding QuickServiceCommand}"
+                                            CommandParameter="discord.com|discord.gg"
+                                            ToolTip="Добавить Discord в список VPN">
+                                        <StackPanel>
+                                            <Border Width="44" Height="44" CornerRadius="11" Background="#5865F2">
+                                                <TextBlock Text="D" FontSize="21" FontWeight="Bold" Foreground="White"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                            <TextBlock Text="Discord" FontSize="10.5" Foreground="{StaticResource MutedBrush}"
+                                                       HorizontalAlignment="Center" Margin="0,5,0,0" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource ServiceTile}" Command="{Binding QuickServiceCommand}"
+                                            CommandParameter="youtube.com|googlevideo.com"
+                                            ToolTip="Добавить YouTube в список VPN">
+                                        <StackPanel>
+                                            <Border Width="44" Height="44" CornerRadius="11" Background="#FF0033">
+                                                <TextBlock Text="▶" FontSize="18" Foreground="White"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                            <TextBlock Text="YouTube" FontSize="10.5" Foreground="{StaticResource MutedBrush}"
+                                                       HorizontalAlignment="Center" Margin="0,5,0,0" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource ServiceTile}" Command="{Binding QuickServiceCommand}"
+                                            CommandParameter="twitch.tv"
+                                            ToolTip="Добавить Twitch в список VPN">
+                                        <StackPanel>
+                                            <Border Width="44" Height="44" CornerRadius="11" Background="#9146FF">
+                                                <TextBlock Text="▮" FontSize="18" Foreground="White"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                            <TextBlock Text="Twitch" FontSize="10.5" Foreground="{StaticResource MutedBrush}"
+                                                       HorizontalAlignment="Center" Margin="0,5,0,0" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource ServiceTile}" Command="{Binding QuickServiceCommand}"
+                                            CommandParameter="spotify.com"
+                                            ToolTip="Добавить Spotify в список VPN">
+                                        <StackPanel>
+                                            <Border Width="44" Height="44" CornerRadius="11" Background="#1DB954">
+                                                <TextBlock Text="♫" FontSize="20" Foreground="White"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                            <TextBlock Text="Spotify" FontSize="10.5" Foreground="{StaticResource MutedBrush}"
+                                                       HorizontalAlignment="Center" Margin="0,5,0,0" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource ServiceTile}" Command="{Binding NavigateCommand}"
+                                            CommandParameter="2"
+                                            ToolTip="Настроить обход для игры: серверы, порты, стратегии">
+                                        <StackPanel>
+                                            <Border Width="44" Height="44" CornerRadius="11" Background="#C23C2A">
+                                                <TextBlock Text="⚔" FontSize="18" Foreground="White"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                            <TextBlock Text="Dota 2" FontSize="10.5" Foreground="{StaticResource MutedBrush}"
+                                                       HorizontalAlignment="Center" Margin="0,5,0,0" />
+                                        </StackPanel>
+                                    </Button>
+                                </UniformGrid>
+                            </Grid>
+
+                            <!-- Режим и быстрые действия -->
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="1.15*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,14,0">
+                                    <StackPanel>
+                                        <TextBlock Text="Режим подключения" FontSize="13" FontWeight="SemiBold"
+                                                   Margin="0,0,0,10" />
+                                        <RadioButton GroupName="VpnModeHome" Margin="0,0,0,8"
+                                                     IsChecked="{Binding VpnModeIsSplit, Mode=TwoWay}">
+                                            <TextBlock Text="Только выбранные сайты и программы" TextWrapping="Wrap" />
+                                        </RadioButton>
+                                        <RadioButton GroupName="VpnModeHome"
+                                                     IsChecked="{Binding VpnModeIsFull, Mode=TwoWay}">
+                                            <TextBlock Text="Весь трафик через VPN" TextWrapping="Wrap" />
+                                        </RadioButton>
+                                        <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0"
+                                                   Text="В режиме сплита VPN трогает только выбранные сайты и программы — остальная сеть работает напрямую." />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Grid.Column="1" Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="Быстрые действия" FontSize="13" FontWeight="SemiBold"
+                                                   Margin="0,0,0,10" />
+                                        <Button Content="Выбрать локацию" Style="{StaticResource AccentButton}"
+                                                Command="{Binding NavigateCommand}" CommandParameter="1"
+                                                HorizontalAlignment="Stretch" Margin="0,0,0,8" />
+                                        <Button Content="Тест скорости" Command="{Binding SpeedTestCommand}"
+                                                HorizontalAlignment="Stretch" />
+                                        <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0"
+                                                   Text="{Binding SpeedTestText}" />
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- ==================== 1. Локации ==================== -->
+                <TabItem>
+                    <Grid Margin="24,18,24,18">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0" Margin="0,0,0,14">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Style="{StaticResource PageTitle}" Text="Локации" />
+                                <Border Background="{StaticResource PanelAltBrush}" CornerRadius="9" Padding="8,2"
+                                        Margin="10,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding VpnKeyCount}" FontSize="11"
+                                               Foreground="{StaticResource MutedBrush}" />
+                                </Border>
+                                <TextBlock Style="{StaticResource Muted}" Margin="12,0,0,0" VerticalAlignment="Center"
+                                           Text="Двойной клик по строке — подключиться" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button Content="Добавить ключ…" Command="{Binding VpnAddKeyCommand}" Margin="0,0,8,0"
+                                        ToolTip="Вставьте ключ vless/vmess/trojan/ss/hysteria2 или ссылку на подписку" />
+                                <Button Content="Удалить" Command="{Binding VpnRemoveKeyCommand}" />
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid Grid.Row="1">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="1.35*" MinWidth="420" />
+                                <ColumnDefinition Width="14" />
+                                <ColumnDefinition Width="1*" MinWidth="360" />
+                            </Grid.ColumnDefinitions>
+
+                            <Border Grid.Column="0" Style="{StaticResource Card}" Padding="8">
+                                <DataGrid ItemsSource="{Binding VpnKeysView}"
+                                          SelectedItem="{Binding SelectedVpnKey}"
+                                          IsReadOnly="True"
+                                          CanUserResizeColumns="True"
+                                          CanUserSortColumns="True"
+                                          EnableRowVirtualization="True"
+                                          RowHeight="46"
+                                          MouseDoubleClick="VpnKeysGrid_MouseDoubleClick"
+                                          ToolTip="Двойной клик по локации или по названию страны — подключить VPN и включить обход DPI"
+                                          ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                                    <DataGrid.Columns>
+                                        <DataGridTemplateColumn Header="Локации" Width="*" MinWidth="240">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <Grid Margin="2,5,2,5" ToolTip="{Binding Server}">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+
+                                                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                                            <StackPanel Orientation="Horizontal">
+                                                                <TextBlock Text="{Binding Flag}" FontSize="14" Margin="0,0,7,0"
+                                                                           VerticalAlignment="Center" />
+                                                                <TextBlock Text="{Binding TitleText}" FontSize="13" FontWeight="SemiBold"
+                                                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                                            </StackPanel>
+                                                            <TextBlock Text="{Binding DetailsText}" FontSize="11" Margin="21,1,0,0"
+                                                                       Foreground="{StaticResource MutedBrush}"
+                                                                       TextTrimming="CharacterEllipsis" />
+                                                        </StackPanel>
+
+                                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="10,0,6,0">
+                                                            <TextBlock Text="{Binding PingText}" FontSize="12" FontWeight="SemiBold"
+                                                                       HorizontalAlignment="Right"
+                                                                       Foreground="{Binding QualityColor, Converter={StaticResource StringToBrush}}" />
+                                                            <TextBlock Text="{Binding Quality}" FontSize="10"
+                                                                       HorizontalAlignment="Right"
+                                                                       Foreground="{StaticResource MutedBrush}" />
+                                                        </StackPanel>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                    </DataGrid.Columns>
+                                    <DataGrid.GroupStyle>
+                                        <GroupStyle>
+                                            <GroupStyle.ContainerStyle>
+                                                <Style TargetType="{x:Type GroupItem}">
+                                                    <Setter Property="Template">
+                                                        <Setter.Value>
+                                                            <ControlTemplate TargetType="{x:Type GroupItem}">
+                                                                <Expander IsExpanded="True" Foreground="{StaticResource TextBrush}"
+                                                                          Background="Transparent" Padding="0,2,0,2">
+                                                                    <Expander.Header>
+                                                                        <Border Background="{StaticResource PanelBrush}" CornerRadius="8"
+                                                                                Padding="10,7" Margin="0,3,0,5">
+                                                                            <StackPanel Orientation="Horizontal">
+                                                                                <TextBlock Text="▣" FontSize="13" Margin="0,0,8,0"
+                                                                                           Foreground="{StaticResource AccentBrush}"
+                                                                                           VerticalAlignment="Center" />
+                                                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                                                                           Foreground="{StaticResource TextBrush}"
+                                                                                           VerticalAlignment="Center" />
+                                                                                <TextBlock Text="{Binding ItemCount, StringFormat='  ({0} ключей)'}"
+                                                                                           Foreground="{StaticResource MutedBrush}"
+                                                                                           VerticalAlignment="Center" />
+                                                                            </StackPanel>
+                                                                        </Border>
+                                                                    </Expander.Header>
+                                                                    <ItemsPresenter />
+                                                                </Expander>
+                                                            </ControlTemplate>
+                                                        </Setter.Value>
+                                                    </Setter>
+                                                </Style>
+                                            </GroupStyle.ContainerStyle>
+                                        </GroupStyle>
+                                    </DataGrid.GroupStyle>
+                                </DataGrid>
+                            </Border>
+
+                            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled">
                                 <StackPanel>
-                                    <TextBlock Style="{StaticResource H2}" Text="Выбранная точка" />
-                                    <TextBlock Margin="0,5,0,0">
-                                        <Run Text="{Binding SelectedVpnKey.Name, Mode=OneWay}" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" />
-                                        <Run Text=" · " /><Run Text="{Binding SelectedVpnKey.Country, Mode=OneWay}" />
-                                        <Run Text=" · " /><Run Text="{Binding SelectedVpnKey.Protocol, Mode=OneWay}" />
-                                        <Run Text=" · " /><Run Text="{Binding SelectedVpnKey.Server, Mode=OneWay}" />
-                                        <TextBlock.Style>
-                                            <Style TargetType="TextBlock" BasedOn="{StaticResource Muted}">
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding SelectedVpnKey}" Value="{x:Null}">
+                                    <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                                        <StackPanel>
+                                            <TextBlock Text="Выбранная локация" FontSize="13" FontWeight="SemiBold" />
+                                            <TextBlock Margin="0,8,0,0"
+                                                       TextWrapping="Wrap"
+                                                       Text="Локация не выбрана. Выберите ключ в списке слева или в шапке окна.">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock" BasedOn="{StaticResource Muted}">
                                                         <Setter Property="Visibility" Value="Collapsed" />
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </TextBlock.Style>
-                                    </TextBlock>
-                                    <TextBlock Margin="0,5,0,0" TextWrapping="Wrap"
-                                               Text="Локация не выбрана — нажмите на строку в списке слева (или дважды кликните, чтобы подключиться).">
-                                        <TextBlock.Style>
-                                            <Style TargetType="TextBlock" BasedOn="{StaticResource Muted}">
-                                                <Setter Property="Visibility" Value="Collapsed" />
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding SelectedVpnKey}" Value="{x:Null}">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding SelectedVpnKey}" Value="{x:Null}">
+                                                                <Setter Property="Visibility" Value="Visible" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <StackPanel Margin="0,8,0,0">
+                                                <StackPanel.Style>
+                                                    <Style TargetType="StackPanel">
                                                         <Setter Property="Visibility" Value="Visible" />
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </TextBlock.Style>
-                                    </TextBlock>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding SelectedVpnKey}" Value="{x:Null}">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </StackPanel.Style>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding SelectedVpnKey.Flag}" FontSize="24"
+                                                               VerticalAlignment="Center" />
+                                                    <StackPanel Margin="9,0,0,0" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding SelectedVpnKey.Name}"
+                                                                   FontSize="13" FontWeight="SemiBold"
+                                                                   TextTrimming="CharacterEllipsis" MaxWidth="280" />
+                                                        <TextBlock Text="{Binding SelectedVpnKey.Server}"
+                                                                   FontSize="11" Foreground="{StaticResource MutedBrush}"
+                                                                   TextTrimming="CharacterEllipsis" MaxWidth="280" />
+                                                    </StackPanel>
+                                                </StackPanel>
+                                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                                    <TextBlock Style="{StaticResource Muted}" Text="{Binding SelectedVpnKey.Country}" />
+                                                    <TextBlock Style="{StaticResource Muted}" Text=" · " />
+                                                    <TextBlock Style="{StaticResource Muted}" Text="{Binding SelectedVpnKey.Protocol}" />
+                                                    <TextBlock Style="{StaticResource Muted}" Text=" · " />
+                                                    <TextBlock Style="{StaticResource Muted}" Text="{Binding SelectedVpnKey.PingText}" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <Border Style="{StaticResource Card}">
+                                        <StackPanel>
+                                            <Grid Margin="0,0,0,8">
+                                                <TextBlock Text="VPN по ключу" FontSize="13" FontWeight="SemiBold"
+                                                           VerticalAlignment="Center" />
+                                                <Button Content="Обновить ядро" Style="{StaticResource LinkButton}"
+                                                        HorizontalAlignment="Right"
+                                                        Command="{Binding VpnInstallCoreCommand}" />
+                                            </Grid>
+
+                                            <RadioButton GroupName="VpnModeLocations" Margin="0,0,0,6"
+                                                         IsChecked="{Binding VpnModeIsSplit, Mode=TwoWay}">
+                                                <TextBlock Text="Только выбранные сайты и программы" TextWrapping="Wrap" />
+                                            </RadioButton>
+                                            <RadioButton GroupName="VpnModeLocations" Margin="0,0,0,10"
+                                                         IsChecked="{Binding VpnModeIsFull, Mode=TwoWay}">
+                                                <TextBlock Text="Весь трафик через VPN (нужно подтверждение)" TextWrapping="Wrap" />
+                                            </RadioButton>
+
+                                            <TextBlock Text="Сайты через VPN" FontSize="12" FontWeight="SemiBold"
+                                                       Margin="0,0,0,5" />
+                                            <TextBox Text="{Binding VpnDomainsText}"
+                                                     ToolTip="Сайты, которые пойдут через VPN: youtube.com, discord.com, openai.com" />
+
+                                            <Expander Margin="0,8,0,0" IsExpanded="False"
+                                                      HorizontalContentAlignment="Stretch"
+                                                      Foreground="{StaticResource TextBrush}">
+                                                <Expander.Header>
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="Добавленные сайты" FontWeight="SemiBold"
+                                                                   Foreground="{StaticResource TextBrush}" />
+                                                        <TextBlock Text="{Binding VpnSelectedSitesCount, StringFormat=' ({0})'}"
+                                                                   Foreground="{StaticResource MutedBrush}" />
+                                                    </StackPanel>
+                                                </Expander.Header>
+                                                <Border Background="{StaticResource PanelAltBrush}" CornerRadius="6"
+                                                        Padding="6" Margin="0,4,0,0">
+                                                    <ScrollViewer MaxHeight="150" VerticalScrollBarVisibility="Auto"
+                                                                  HorizontalScrollBarVisibility="Disabled">
+                                                        <ItemsControl ItemsSource="{Binding VpnSelectedSites}">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate>
+                                                                    <DockPanel Margin="0,1,0,1">
+                                                                        <Button DockPanel.Dock="Right" Content="×" Width="24" Height="22"
+                                                                                Command="{Binding DataContext.RemoveVpnSiteCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                                CommandParameter="{Binding}" />
+                                                                        <TextBlock Text="{Binding}" VerticalAlignment="Center" Margin="6,0,0,0" />
+                                                                    </DockPanel>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                    </ScrollViewer>
+                                                </Border>
+                                            </Expander>
+
+                                            <ComboBox Margin="0,8,0,0" MinHeight="38" FontSize="13"
+                                                      Style="{StaticResource SearchableCombo}"
+                                                      ItemsSource="{Binding VpnTargetsView}"
+                                                      SelectedItem="{Binding SelectedVpnTarget}"
+                                                      Tag="{Binding VpnTargetSearch, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                      DropDownOpened="VpnTargetsCombo_DropDownOpened"
+                                                      DropDownClosed="VpnTargetsCombo_DropDownClosed"
+                                                      ToolTip="Поиск по запущенным приложениям. Выбранное приложение добавляется в список ниже">
+                                                <ComboBox.GroupStyle>
+                                                    <GroupStyle>
+                                                        <GroupStyle.HeaderTemplate>
+                                                            <DataTemplate>
+                                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="11"
+                                                                           Foreground="{StaticResource MutedBrush}" Margin="9,7,9,3" />
+                                                            </DataTemplate>
+                                                        </GroupStyle.HeaderTemplate>
+                                                    </GroupStyle>
+                                                </ComboBox.GroupStyle>
+                                            </ComboBox>
+                                            <TextBlock Style="{StaticResource Muted}" Margin="0,7,0,2"
+                                                       Text="Выбранные приложения" />
+                                            <ItemsControl ItemsSource="{Binding VpnSelectedPrograms}" Margin="0,3,0,0">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <DockPanel Margin="0,1,0,1">
+                                                            <Button DockPanel.Dock="Right" Content="×" Width="24" Height="22"
+                                                                    Command="{Binding DataContext.RemoveVpnProgramCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding}" />
+                                                            <TextBlock Text="{Binding}" VerticalAlignment="Center" Margin="6,0,0,0" />
+                                                        </DockPanel>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+
+                                            <TextBlock Style="{StaticResource Muted}" Margin="0,10,0,4"
+                                                       Text="Готовый список заблокированных сервисов РФ" />
+                                            <ComboBox SelectedIndex="{Binding BlockedPresetIndex, Mode=TwoWay}" MinHeight="34">
+                                                <ComboBoxItem Content="Не использовать" />
+                                                <ComboBoxItem Content="Стандартный список (≈1,2 тыс. доменов)" />
+                                                <ComboBoxItem Content="Полный реестр РКН (≈1,7 млн доменов)" />
+                                            </ComboBox>
+                                            <TextBlock Style="{StaticResource Muted}" Margin="0,4,0,0"
+                                                       Text="{Binding BlockedListStatus}" />
+                                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                                <TextBlock Style="{StaticResource Muted}" Text="MTU туннеля:"
+                                                           VerticalAlignment="Center" Margin="0,0,8,0" />
+                                                <TextBox Text="{Binding VpnMtuText, UpdateSourceTrigger=LostFocus}"
+                                                         Width="72" MinHeight="30"
+                                                         ToolTip="1400 — для PPPoE, 1500 — для обычного Ethernet (допустимо 1280–9000)" />
+                                            </StackPanel>
+
+                                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                                <Ellipse Width="8" Height="8"
+                                                         Fill="{Binding VpnStatusColor, Converter={StaticResource StringToBrush}}"
+                                                         VerticalAlignment="Center" Margin="0,0,8,0" />
+                                                <TextBlock Text="{Binding VpnStatusText}" FontWeight="SemiBold"
+                                                           VerticalAlignment="Center"
+                                                           Foreground="{Binding VpnStatusColor, Converter={StaticResource StringToBrush}}" />
+                                            </StackPanel>
+
+                                            <WrapPanel Margin="0,10,0,0">
+                                                <Button Content="Подключить VPN" Style="{StaticResource AccentButton}"
+                                                        Command="{Binding VpnConnectCommand}" Margin="0,0,6,4" />
+                                                <Button Content="Отключить VPN" Style="{StaticResource DangerButton}"
+                                                        Command="{Binding VpnDisconnectCommand}" Margin="0,0,6,4" />
+                                            </WrapPanel>
+
+                                            <Grid Margin="0,10,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <Button Grid.Column="0" Content="Тест скорости"
+                                                        Command="{Binding SpeedTestCommand}"
+                                                        ToolTip="Замер через текущее соединение: пинг, скачивание и отдача (Cloudflare)" />
+                                                <TextBlock Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center"
+                                                           Style="{StaticResource Muted}" TextWrapping="Wrap"
+                                                           Text="{Binding SpeedTestText}" />
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Grid>
+                    </Grid>
+                </TabItem>
+
+                <!-- ==================== 2. Игры и сервисы ==================== -->
+                <TabItem>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24,18,24,20">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource PageTitle}" Text="Игры и сервисы" />
+                            <TextBlock Style="{StaticResource PageSubtitle}"
+                                       Text="Игровой режим zapret: обход по IP-адресам и портам игры, отдельно от сайтов. Подходит, когда провайдер режет именно игровые серверы." />
+
+                            <Border Style="{StaticResource Card}" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Серверы и порты игры" FontSize="13" FontWeight="SemiBold" />
                                     <TextBlock Style="{StaticResource Muted}" Margin="0,4,0,0"
-                                               Text="Точки выбираются в левой панели: там список ключей с пингом, потерями и качеством." />
+                                               Text="Запустите игру и войдите в неё. Выберите процесс, нажмите «Серверы игры» — адреса и TCP-порты подставятся из активных соединений. UDP-порты Windows не отдаёт, их при необходимости добавьте вручную." />
+
+                                    <TextBlock Style="{StaticResource Muted}" Margin="0,10,0,0" Text="Процесс игры" />
+                                    <ComboBox Margin="0,4,0,0" MinHeight="34" MaxDropDownHeight="260"
+                                              ItemsSource="{Binding Processes}"
+                                              SelectedValuePath="Name"
+                                              SelectedValue="{Binding DpiGameProcess, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                              IsTextSearchEnabled="True"
+                                              ToolTip="Выберите запущенную игру — по её соединениям будут найдены серверы">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding DisplayName}" />
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+
+                                    <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0"
+                                               Text="IP серверов игры (по одному в строке)" />
+                                    <TextBox Margin="0,4,0,0" MinHeight="72" AcceptsReturn="True" TextWrapping="NoWrap"
+                                             VerticalScrollBarVisibility="Auto"
+                                             Text="{Binding DpiGameIps, UpdateSourceTrigger=PropertyChanged}"
+                                             ToolTip="IP-адреса серверов игры, по одному в строке" />
+
+                                    <Grid Margin="0,8,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                            <TextBlock Style="{StaticResource Muted}" Text="TCP-порты игры" />
+                                            <TextBox Margin="0,4,0,0"
+                                                     Text="{Binding DpiGameTcpPorts, UpdateSourceTrigger=PropertyChanged}"
+                                                     ToolTip="TCP-порты игры: 6112 или 6112,27015-27020" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Margin="0,0,6,0">
+                                            <TextBlock Style="{StaticResource Muted}" Text="UDP-порты игры" />
+                                            <TextBox Margin="0,4,0,0"
+                                                     Text="{Binding DpiGameUdpPorts, UpdateSourceTrigger=PropertyChanged}"
+                                                     ToolTip="UDP-порты игры (голос, бой): 3074 или 3478-3480" />
+                                        </StackPanel>
+                                        <Button Grid.Column="2" Content="Серверы игры" VerticalAlignment="Bottom"
+                                                Command="{Binding DpiDetectGameCommand}"
+                                                ToolTip="Взять IP-адреса и TCP-порты из соединений выбранной игры" />
+                                    </Grid>
+
+                                    <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                               Text="{Binding DpiGameSummary}" />
                                 </StackPanel>
                             </Border>
 
-                            <!-- Опции -->
-                            <Border Background="{StaticResource PanelBrush}" CornerRadius="9" Padding="14" Margin="0,0,0,12">
+                            <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                                 <StackPanel>
-                                    <TextBlock Style="{StaticResource H2}" Text="Опции" Margin="0,0,0,8" />
+                                    <Grid>
+                                        <TextBlock Text="Стратегии для игр" FontSize="13" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                        <TextBlock Style="{StaticResource Muted}" HorizontalAlignment="Right"
+                                                   VerticalAlignment="Center"
+                                                   Text="Показаны только стратегии с пометкой «Игры»" />
+                                    </Grid>
+                                    <DataGrid Height="240" Margin="0,8,0,0"
+                                              ItemsSource="{Binding DpiGameStrategiesView}"
+                                              SelectedItem="{Binding SelectedDpiStrategy}"
+                                              IsReadOnly="True" EnableRowVirtualization="True">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="Стратегия" Binding="{Binding Name}" Width="*" MinWidth="200" />
+                                            <DataGridTextColumn Header="Результат" Binding="{Binding Result}" Width="150" />
+                                            <DataGridTextColumn Header="Оценка" Binding="{Binding ScoreText}" Width="110" />
+                                            <DataGridTextColumn Header="Источник" Binding="{Binding Source}" Width="130" />
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                    <Grid Margin="0,10,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                            <Button Content="Автоподбор лучшей" Style="{StaticResource AccentButton}"
+                                                    Command="{Binding DpiAutoSelectCommand}" Margin="0,0,8,0" />
+                                            <Button Content="Применить" Command="{Binding DpiApplyCommand}" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                                            <TextBlock Style="{StaticResource Muted}" Text="{Binding DpiProgressText}" />
+                                            <TextBlock Style="{StaticResource Muted}" Margin="0,2,0,0">
+                                                <Run Text="Без обхода: " Foreground="#5A6478" />
+                                                <Run Text="{Binding DpiBaselineText, Mode=OneWay}" />
+                                                <Run Text="   Лучшая: " Foreground="#5A6478" />
+                                                <Run Text="{Binding DpiBestText, Mode=OneWay}" />
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Популярные сервисы" FontSize="13" FontWeight="SemiBold" />
+                                    <TextBlock Style="{StaticResource Muted}" Margin="0,3,0,6"
+                                               Text="Нажмите на сервис, чтобы добавить его домены в список VPN. Изменения применятся после переподключения VPN." />
+                                    <UniformGrid Columns="6">
+                                        <Button Style="{StaticResource ServiceTile}" Command="{Binding QuickServiceCommand}"
+                                                CommandParameter="steamcommunity.com|store.steampowered.com"
+                                                ToolTip="Добавить Steam в список VPN">
+                                            <StackPanel>
+                                                <Border Width="44" Height="44" CornerRadius="11" Background="#1B2838">
+                                                    <TextBlock Text="S" FontSize="21" FontWeight="Bold" Foreground="#C7D5E0"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                </Border>
+                                                <TextBlock Text="Steam" FontSize="10.5" Foreground="{StaticResource MutedBrush}"
+                                                           HorizontalAlignment="Center" Margin="0,5,0,0" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Style="{StaticResource ServiceTile}" Command="{Binding QuickServiceCommand}"
+                                                CommandParameter="discord.com|discord.gg"
+                                                ToolTip="Добавить Discord в список VPN">
+                                            <StackPanel>
+                                                <Border Width="44" Height="44" CornerRadius="11" Background="#5865F2">
+                                                    <TextBlock Text="D" FontSize="21" FontWeight="Bold" Foreground="White"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                </Border>
+                                                <TextBlock Text="Discord" FontSize="10.5" Foreground="{StaticResource MutedBrush}"
+                                                           HorizontalAlignment="Center" Margin="0,5,0,0" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Style="{StaticResource ServiceTile}" Command="{Binding QuickServiceCommand}"
+                                                CommandParameter="youtube.com|googlevideo.com"
+                                                ToolTip="Добавить YouTube в список VPN">
+                                            <StackPanel>
+                                                <Border Width="44" Height="44" CornerRadius="11" Background="#FF0033">
+                                                    <TextBlock Text="▶" FontSize="18" Foreground="White"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                </Border>
+                                                <TextBlock Text="YouTube" FontSize="10.5" Foreground="{StaticResource MutedBrush}"
+                                                           HorizontalAlignment="Center" Margin="0,5,0,0" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Style="{StaticResource ServiceTile}" Command="{Binding QuickServiceCommand}"
+                                                CommandParameter="twitch.tv"
+                                                ToolTip="Добавить Twitch в список VPN">
+                                            <StackPanel>
+                                                <Border Width="44" Height="44" CornerRadius="11" Background="#9146FF">
+                                                    <TextBlock Text="▮" FontSize="18" Foreground="White"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                </Border>
+                                                <TextBlock Text="Twitch" FontSize="10.5" Foreground="{StaticResource MutedBrush}"
+                                                           HorizontalAlignment="Center" Margin="0,5,0,0" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Style="{StaticResource ServiceTile}" Command="{Binding QuickServiceCommand}"
+                                                CommandParameter="spotify.com"
+                                                ToolTip="Добавить Spotify в список VPN">
+                                            <StackPanel>
+                                                <Border Width="44" Height="44" CornerRadius="11" Background="#1DB954">
+                                                    <TextBlock Text="♫" FontSize="20" Foreground="White"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                </Border>
+                                                <TextBlock Text="Spotify" FontSize="10.5" Foreground="{StaticResource MutedBrush}"
+                                                           HorizontalAlignment="Center" Margin="0,5,0,0" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Style="{StaticResource ServiceTile}" Command="{Binding NavigateCommand}"
+                                                CommandParameter="3"
+                                                ToolTip="Перейти к обходу DPI и игровым стратегиям">
+                                            <StackPanel>
+                                                <Border Width="44" Height="44" CornerRadius="11" Background="#C23C2A">
+                                                    <TextBlock Text="⚔" FontSize="18" Foreground="White"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                </Border>
+                                                <TextBlock Text="Dota 2" FontSize="10.5" Foreground="{StaticResource MutedBrush}"
+                                                           HorizontalAlignment="Center" Margin="0,5,0,0" />
+                                            </StackPanel>
+                                        </Button>
+                                    </UniformGrid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Как включить обход игры" FontSize="13" FontWeight="SemiBold" />
+                                    <TextBlock Style="{StaticResource Muted}" Margin="0,6,0,0"
+                                               Text="1. Запустите игру и войдите в неё.  2. Выберите процесс игры и нажмите «Серверы игры».  3. Выберите стратегию с пометкой «Игры» и нажмите «Применить»." />
+                                    <TextBlock Style="{StaticResource Muted}" Margin="0,6,0,0"
+                                               Text="Если ни одна стратегия не помогла, блокировка идёт по IP — тогда нужен VPN с разделением по процессу: добавьте игру в «Выбранные приложения» на странице «Локации»." />
+                                    <Button Content="Открыть обход DPI" Style="{StaticResource LinkButton}"
+                                            HorizontalAlignment="Left" Margin="0,6,0,0"
+                                            Command="{Binding NavigateCommand}" CommandParameter="3" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- ==================== 3. Обход DPI ==================== -->
+                <TabItem>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24,18,24,20">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource PageTitle}" Text="Обход DPI" />
+                            <TextBlock Style="{StaticResource PageSubtitle}"
+                                       Text="Движок zapret, цели обхода и стратегии. Для игр используйте страницу «Игры и сервисы»." />
+
+                            <Border Style="{StaticResource Card}" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <Border Background="#1A2FBF71" CornerRadius="8" Padding="12,8" Margin="0,0,0,10">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Ellipse Width="9" Height="9" VerticalAlignment="Center"
+                                                     Fill="{Binding DpiActiveColor, Converter={StaticResource StringToBrush}}" />
+                                            <TextBlock Text="{Binding DpiActiveText}" Margin="10,0,0,0"
+                                                       VerticalAlignment="Center" FontWeight="SemiBold"
+                                                       Foreground="{Binding DpiActiveColor, Converter={StaticResource StringToBrush}}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Grid>
+                                        <StackPanel>
+                                            <TextBlock Text="Движок zapret" FontSize="13" FontWeight="SemiBold" />
+                                            <TextBlock Style="{StaticResource Muted}" Text="{Binding DpiEngineStatus}" Margin="0,3,0,0" />
+                                            <TextBlock Style="{StaticResource Muted}" Text="{Binding DpiUpdateStatus}" />
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+                                            <Button Content="Обновить zapret" Command="{Binding DpiUpdateCommand}" Margin="0,0,6,0" />
+                                            <Button Content="Проверить" Command="{Binding DpiCheckCommand}" Margin="0,0,6,0" />
+                                            <Button Content="Стоп" Command="{Binding DpiStopCommand}" Margin="0,0,6,0" />
+                                            <Button Content="Снять принудительно" Command="{Binding DpiForceStopCommand}"
+                                                    ToolTip="Убить все процессы zapret и выгрузить драйвер WinDivert — если трафик всё ещё перехватывается" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <CheckBox Content="Проверять обновления при запуске" Margin="0,0,18,0"
+                                                  IsChecked="{Binding DpiCheckUpdates}" />
+                                        <CheckBox Content="Обновлять автоматически" Margin="0,0,18,0"
+                                                  IsChecked="{Binding DpiAutoUpdate}" />
+                                        <CheckBox Content="Применять при подключении VPN"
+                                                  IsChecked="{Binding DpiApplyOnConnect}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Что обходим" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                    <TextBox Text="{Binding DpiTargetHosts, UpdateSourceTrigger=PropertyChanged}"
+                                             ToolTip="Сайты для обхода DPI: discord.com, youtube.com" />
+                                    <ComboBox Margin="0,6,0,0" MinHeight="38" FontSize="13"
+                                              Style="{StaticResource SearchableCombo}"
+                                              ItemsSource="{Binding DpiTargetsView}"
+                                              SelectedItem="{Binding SelectedDpiTarget}"
+                                              Tag="{Binding DpiTargetSearch, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                              DropDownOpened="VpnTargetsCombo_DropDownOpened"
+                                              DropDownClosed="DpiTargetsCombo_DropDownClosed"
+                                              ToolTip="Поиск сайта или программы для обхода DPI" />
+                                    <Expander Margin="0,8,0,0" IsExpanded="False"
+                                              HorizontalContentAlignment="Stretch"
+                                              Foreground="{StaticResource TextBrush}">
+                                        <Expander.Header>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="Добавленные сайты" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource TextBrush}" />
+                                                <TextBlock Text="{Binding DpiSelectedTargetsCount, StringFormat=' ({0})'}"
+                                                           Foreground="{StaticResource MutedBrush}" />
+                                            </StackPanel>
+                                        </Expander.Header>
+                                        <Border Background="{StaticResource PanelAltBrush}" CornerRadius="6"
+                                                Padding="6" Margin="0,4,0,0">
+                                            <ScrollViewer MaxHeight="150" VerticalScrollBarVisibility="Auto"
+                                                          HorizontalScrollBarVisibility="Disabled">
+                                                <ItemsControl ItemsSource="{Binding DpiSelectedTargets}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <DockPanel Margin="0,1,0,1">
+                                                                <Button DockPanel.Dock="Right" Content="×" Width="24" Height="22"
+                                                                        Command="{Binding DataContext.RemoveDpiTargetCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                        CommandParameter="{Binding}" />
+                                                                <TextBlock Text="{Binding}" VerticalAlignment="Center" Margin="6,0,0,0" />
+                                                            </DockPanel>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </ScrollViewer>
+                                        </Border>
+                                    </Expander>
+
+                                    <TextBlock Style="{StaticResource Muted}" Margin="0,10,0,4"
+                                               Text="Готовый список заблокированных сервисов РФ" />
+                                    <ComboBox SelectedIndex="{Binding BlockedPresetIndex, Mode=TwoWay}" MinHeight="34">
+                                        <ComboBoxItem Content="Не использовать" />
+                                        <ComboBoxItem Content="Стандартный список (≈1,2 тыс. доменов)" />
+                                        <ComboBoxItem Content="Полный реестр РКН (≈1,7 млн доменов)" />
+                                    </ComboBox>
+                                    <TextBlock Style="{StaticResource Muted}" Margin="0,4,0,0"
+                                               Text="{Binding BlockedPresetHint}" />
+                                    <TextBlock Style="{StaticResource Muted}" Margin="0,2,0,0"
+                                               Text="{Binding BlockedListStatus}" />
+                                    <TextBlock Style="{StaticResource Muted}" Margin="0,6,0,0"
+                                               Text="Проверяется TLS-рукопожатие с этими доменами — именно его ломает DPI. Оценка: скорость ответа (отлично ≤ 100 мс, хорошо ≤ 200 мс и т.д.)." />
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}" Margin="0,12,0,0" Padding="8">
+                                <DataGrid Height="260" ItemsSource="{Binding DpiStrategies}"
+                                          SelectedItem="{Binding SelectedDpiStrategy}"
+                                          IsReadOnly="True" EnableRowVirtualization="True">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Стратегия" Binding="{Binding Name}" Width="*" MinWidth="220" />
+                                        <DataGridTextColumn Header="Тип" Binding="{Binding Kind}" Width="80" />
+                                        <DataGridTextColumn Header="Результат" Binding="{Binding Result}" Width="150" />
+                                        <DataGridTextColumn Header="Оценка" Binding="{Binding ScoreText}" Width="110" />
+                                        <DataGridTextColumn Header="Источник" Binding="{Binding Source}" Width="130" />
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Border>
+
+                            <Grid Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                    <Button Content="Автоподбор лучшей" Style="{StaticResource AccentButton}"
+                                            Command="{Binding DpiAutoSelectCommand}" Margin="0,0,8,0" />
+                                    <Button Content="Применить" Command="{Binding DpiApplyCommand}" Margin="0,0,8,0" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Style="{StaticResource Muted}" Text="{Binding DpiProgressText}" />
+                                    <TextBlock Style="{StaticResource Muted}" Margin="0,2,0,0">
+                                        <Run Text="Без обхода: " Foreground="#5A6478" />
+                                        <Run Text="{Binding DpiBaselineText, Mode=OneWay}" />
+                                        <Run Text="   Лучшая: " Foreground="#5A6478" />
+                                        <Run Text="{Binding DpiBestText, Mode=OneWay}" />
+                                    </TextBlock>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- ==================== 4. Журнал ==================== -->
+                <TabItem>
+                    <Grid Margin="24,18,24,18">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Grid Grid.Row="0" Margin="0,0,0,12">
+                            <TextBlock Style="{StaticResource PageTitle}" Text="Журнал" VerticalAlignment="Center" />
+                            <Button Content="Скопировать" Style="{StaticResource LinkButton}" HorizontalAlignment="Right"
+                                    Command="{Binding CopyLogCommand}" />
+                        </Grid>
+                        <Border Grid.Row="1" Style="{StaticResource Card}" Padding="10">
+                            <Grid>
+                                <ListBox ItemsSource="{Binding Logs}" Background="Transparent" BorderThickness="0">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock FontFamily="Consolas" FontSize="11.5" TextWrapping="Wrap">
+                                                <Run Text="{Binding Time, Mode=OneWay}" Foreground="#5A6478" />
+                                                <Run Text=" " Foreground="#5A6478" />
+                                                <Run Text="{Binding LevelText, Mode=OneWay}" Foreground="#7C87A0" />
+                                                <Run Text="  " Foreground="#5A6478" />
+                                                <Run Text="{Binding Message, Mode=OneWay}" Foreground="#DCE2EC" />
+                                            </TextBlock>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <TextBlock Text="Пока нет записей. Действия приложения — подключение, обход DPI, обновления — появятся здесь."
+                                           TextWrapping="Wrap" MaxWidth="420"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           TextAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource Muted}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Logs.Count}" Value="0">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </TabItem>
+
+                <!-- ==================== 5. Настройки ==================== -->
+                <TabItem>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24,18,24,20">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource PageTitle}" Text="Настройки" />
+                            <TextBlock Style="{StaticResource PageSubtitle}"
+                                       Text="Общие параметры приложения, обновления и сеть." />
+
+                            <Border Style="{StaticResource Card}" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Общие" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,8" />
                                     <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                        <TextBlock Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,10,0"
-                                                   Text="При нажатии на крестик:" />
-                                        <ComboBox Width="250"
-                                                  SelectedIndex="{Binding CloseActionIndex}"
+                                        <TextBlock Style="{StaticResource Muted}" VerticalAlignment="Center"
+                                                   Margin="0,0,10,0" Text="При нажатии на крестик:" />
+                                        <ComboBox Width="280" SelectedIndex="{Binding CloseActionIndex}"
                                                   ToolTip="Что делать при закрытии окна: свернуть в значок трея или отключиться и выйти">
                                             <ComboBoxItem Content="Свернуть в трей (работа продолжится)" />
                                             <ComboBoxItem Content="Отключиться и выйти" />
@@ -351,8 +1363,12 @@
                                     </StackPanel>
                                     <TextBlock Style="{StaticResource Muted}" Margin="0,10,0,0"
                                                Text="При выходе программа сама отключит соединение, остановит обход DPI (вместе с драйвером) и снимет оставшиеся туннели, чтобы не оставить сеть в нерабочем состоянии." />
+                                </StackPanel>
+                            </Border>
 
-                                    <TextBlock Style="{StaticResource H2}" Text="Обновления" Margin="0,14,0,6" />
+                            <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Обновления" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,8" />
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
@@ -362,20 +1378,24 @@
                                                    TextTrimming="CharacterEllipsis"
                                                    ToolTip="Обновления скачиваются только с официального репозитория GitLab и проверяются по SHA-256">
                                             <Run Text="Источник: " />
-                                            <Run Text="{Binding UpdateSourceText, Mode=OneWay}" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" />
+                                            <Run Text="{Binding UpdateSourceText, Mode=OneWay}"
+                                                 Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" />
                                             <Run Text=" (официальный)" />
                                         </TextBlock>
                                         <Button Grid.Column="1" Content="Проверить обновления" Margin="8,0,0,0"
                                                 Command="{Binding UpdateCheckCommand}" />
                                     </Grid>
                                     <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                                        <CheckBox Content="Проверять при запуске" IsChecked="{Binding CheckAppUpdatesOnStart}" Margin="0,0,16,0" />
-                                        <TextBlock Style="{StaticResource Muted}" VerticalAlignment="Center" Text="{Binding CurrentVersionText}" />
+                                        <CheckBox Content="Проверять при запуске" IsChecked="{Binding CheckAppUpdatesOnStart}"
+                                                  Margin="0,0,16,0" />
+                                        <TextBlock Style="{StaticResource Muted}" VerticalAlignment="Center"
+                                                   Text="{Binding CurrentVersionText}" />
                                         <TextBlock Style="{StaticResource Muted}" VerticalAlignment="Center" Text="  ·  " />
                                         <TextBlock Style="{StaticResource Muted}" VerticalAlignment="Center"
                                                    Text="{Binding UpdateStatusText}" TextTrimming="CharacterEllipsis" />
                                     </StackPanel>
-                                    <WrapPanel Margin="0,6,0,0" Visibility="{Binding IsUpdateAvailable, Converter={StaticResource BoolToVis}}">
+                                    <WrapPanel Margin="0,6,0,0"
+                                               Visibility="{Binding IsUpdateAvailable, Converter={StaticResource BoolToVis}}">
                                         <Button Content="Установить обновление" Style="{StaticResource AccentButton}"
                                                 Command="{Binding UpdateInstallCommand}" Margin="0,0,6,4" />
                                         <Button Content="Отменить загрузку" Style="{StaticResource LinkButton}"
@@ -405,381 +1425,53 @@
                                 </StackPanel>
                             </Border>
 
-                            <!-- VPN по ключу -->
-                            <Border Background="{StaticResource PanelBrush}" CornerRadius="9" Padding="14" Margin="0,0,0,12">
+                            <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                                 <StackPanel>
-                                    <Grid Margin="0,0,0,8">
-                                        <TextBlock Style="{StaticResource H2}" Text="VPN по ключу" VerticalAlignment="Center" />
-                                        <Button Content="Обновить ядро" Style="{StaticResource LinkButton}" HorizontalAlignment="Right"
+                                    <TextBlock Text="VPN и сеть" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,8" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Style="{StaticResource Muted}"
+                                                   Text="Ядро sing-box: ключи, MTU и готовые списки настраиваются на странице «Локации»." />
+                                        <Button Grid.Column="1" Content="Обновить ядро" Margin="8,0,0,0"
                                                 Command="{Binding VpnInstallCoreCommand}" />
                                     </Grid>
-
-                                    <TextBlock Style="{StaticResource Muted}" Margin="0,0,0,6"
-                                               Text="Ключи выбираются в левой панели — там же видно пинг, потери и качество." />
-                                    <TextBlock Style="{StaticResource Muted}" Margin="0,0,0,10">
-                                        <Run Text="Выбранный ключ: " />
-                                        <Run Text="{Binding SelectedVpnKey.Name, Mode=OneWay}" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" />
-                                        <Run Text=" (" /><Run Text="{Binding SelectedVpnKey.Country, Mode=OneWay}" /><Run Text=")" />
-                                    </TextBlock>
-
-                                    <RadioButton GroupName="VpnMode" Margin="0,0,0,6"
-                                                 IsChecked="{Binding VpnModeIsSplit, Mode=TwoWay}"
-                                                 Content="Только выбранные сайты и программы (остальная сеть не трогается)" />
-                                    <RadioButton GroupName="VpnMode" Margin="0,0,0,8"
-                                                 IsChecked="{Binding VpnModeIsFull, Mode=TwoWay}"
-                                                 Content="Весь трафик через VPN (нужно подтверждение)" />
-
-                                    <TextBlock Style="{StaticResource H2}" Text="Сайты через VPN" Margin="0,0,0,6" />
-                                    <TextBox Text="{Binding VpnDomainsText}"
-                                             ToolTip="Сайты, которые пойдут через VPN: youtube.com, discord.com, openai.com" />
-
-                                    <Expander Margin="0,8,0,0" IsExpanded="True"
-                                              HorizontalContentAlignment="Stretch"
-                                              Foreground="{StaticResource TextBrush}">
-                                        <Expander.Header>
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="Добавленные сайты" FontWeight="SemiBold"
-                                                           Foreground="{StaticResource TextBrush}" />
-                                                <TextBlock Text="{Binding VpnSelectedSitesCount, StringFormat=' ({0})'}"
-                                                           Foreground="{StaticResource MutedBrush}" />
-                                            </StackPanel>
-                                        </Expander.Header>
-                                        <Border Background="{StaticResource PanelAltBrush}" CornerRadius="6"
-                                                Padding="6" Margin="0,4,0,0">
-                                            <ScrollViewer MaxHeight="190" VerticalScrollBarVisibility="Auto"
-                                                          HorizontalScrollBarVisibility="Disabled">
-                                                <ItemsControl ItemsSource="{Binding VpnSelectedSites}">
-                                                    <ItemsControl.ItemTemplate>
-                                                        <DataTemplate>
-                                                            <DockPanel Margin="0,1,0,1">
-                                                                <Button DockPanel.Dock="Right" Content="×" Width="24" Height="22"
-                                                                        Command="{Binding DataContext.RemoveVpnSiteCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                                        CommandParameter="{Binding}" />
-                                                                <TextBlock Text="{Binding}" VerticalAlignment="Center" Margin="6,0,0,0" />
-                                                            </DockPanel>
-                                                        </DataTemplate>
-                                                    </ItemsControl.ItemTemplate>
-                                                </ItemsControl>
-                                            </ScrollViewer>
-                                        </Border>
-                                    </Expander>
-
-                                     <ComboBox Margin="0,6,0,0" MinHeight="38" FontSize="13"
-                                            Style="{StaticResource SearchableCombo}"
-                                              ItemsSource="{Binding VpnTargetsView}"
-                                              SelectedItem="{Binding SelectedVpnTarget}"
-                                              Tag="{Binding VpnTargetSearch, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                              DropDownOpened="VpnTargetsCombo_DropDownOpened"
-                                              DropDownClosed="VpnTargetsCombo_DropDownClosed"
-                                               ToolTip="Поиск по запущенным приложениям. Выбранное приложение добавляется в список ниже">
-                                        <ComboBox.GroupStyle>
-                                            <GroupStyle>
-                                                <GroupStyle.HeaderTemplate>
-                                                    <DataTemplate>
-                                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="11"
-                                                                   Foreground="{StaticResource MutedBrush}" Margin="9,7,9,3" />
-                                                    </DataTemplate>
-                                                </GroupStyle.HeaderTemplate>
-                                            </GroupStyle>
-                                        </ComboBox.GroupStyle>
-                                     </ComboBox>
-                                     <TextBlock Style="{StaticResource Muted}" Margin="0,7,0,2" Text="Выбранные приложения" />
-                                     <ItemsControl ItemsSource="{Binding VpnSelectedPrograms}" Margin="0,3,0,0">
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <DockPanel Margin="0,1,0,1">
-                                                    <Button DockPanel.Dock="Right" Content="×" Width="24" Height="22"
-                                                            Command="{Binding DataContext.RemoveVpnProgramCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                            CommandParameter="{Binding}" />
-                                                    <TextBlock Text="{Binding}" VerticalAlignment="Center" Margin="6,0,0,0" />
-                                                </DockPanel>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                    <TextBlock Style="{StaticResource Muted}" Margin="0,10,0,4"
-                                               Text="Готовый список заблокированных сервисов РФ" />
-                                    <ComboBox SelectedIndex="{Binding BlockedPresetIndex, Mode=TwoWay}" MinHeight="34">
-                                        <ComboBoxItem Content="Не использовать" />
-                                        <ComboBoxItem Content="Стандартный список (≈1,2 тыс. доменов)" />
-                                        <ComboBoxItem Content="Полный реестр РКН (≈1,7 млн доменов)" />
-                                    </ComboBox>
-                                    <TextBlock Style="{StaticResource Muted}" Margin="0,4,0,0" TextWrapping="Wrap"
-                                               Text="{Binding BlockedListStatus}" />
-                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                                        <TextBlock Style="{StaticResource Muted}" Text="MTU туннеля:"
-                                                   VerticalAlignment="Center" Margin="0,0,8,0" />
-                                        <TextBox Text="{Binding VpnMtuText, UpdateSourceTrigger=LostFocus}"
-                                                 Width="72" MinHeight="30"
-                                                 ToolTip="1400 — для PPPoE, 1500 — для обычного Ethernet (допустимо 1280–9000)" />
-                                    </StackPanel>
                                     <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                        <Ellipse Width="8" Height="8" Fill="{Binding VpnStatusColor, Converter={StaticResource StringToBrush}}"
-                                                 VerticalAlignment="Center" Margin="0,0,8,0" />
-                                        <TextBlock Text="{Binding VpnStatusText}" FontWeight="SemiBold" VerticalAlignment="Center"
-                                                   Foreground="{Binding VpnStatusColor, Converter={StaticResource StringToBrush}}" />
+                                        <Button Content="Починить интернет" Command="{Binding RestoreNetworkCommand}"
+                                                ToolTip="Снять туннель, вернуть маршруты, очистить DNS-кэш и проверить доступ в сеть" />
+                                        <TextBlock Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="12,0,0,0"
+                                                   Text="{Binding InterfaceText, StringFormat='Интерфейс: {0}'}" />
                                     </StackPanel>
-
-                                     <WrapPanel Margin="0,10,0,0">
-                                         <Button Content="Подключить VPN" Style="{StaticResource AccentButton}"
-                                                 Command="{Binding VpnConnectCommand}" Margin="0,0,6,4" />
-                                         <Button Content="Отключить VPN" Style="{StaticResource DangerButton}"
-                                                 Command="{Binding VpnDisconnectCommand}" Margin="0,0,6,4" />
-                                     </WrapPanel>
-
-                                    <Grid Margin="0,10,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <Button Grid.Column="0" Content="Тест скорости" Command="{Binding SpeedTestCommand}"
-                                                ToolTip="Замер через текущее соединение: пинг, скачивание и отдача (Cloudflare)" />
-                                        <TextBlock Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center"
-                                                   Style="{StaticResource Muted}" TextWrapping="Wrap"
-                                                   Text="{Binding SpeedTestText}" />
-                                    </Grid>
                                 </StackPanel>
                             </Border>
-
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>
-
-                <TabItem Header="Журнал">
-                    <Grid Margin="0,12,6,0">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                        </Grid.RowDefinitions>
-
-                        <Grid Grid.Row="0" Margin="0,0,0,8">
-                            <TextBlock Style="{StaticResource H2}" Text="Журнал событий" VerticalAlignment="Center" />
-                            <Button Content="Скопировать" Style="{StaticResource LinkButton}" HorizontalAlignment="Right" Command="{Binding CopyLogCommand}" />
-                        </Grid>
-
-                        <ListBox Grid.Row="1" ItemsSource="{Binding Logs}">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock FontFamily="Consolas" FontSize="11.5" TextWrapping="Wrap">
-                                        <Run Text="{Binding Time, Mode=OneWay}" Foreground="#5A6478" />
-                                        <Run Text=" " Foreground="#5A6478" />
-                                        <Run Text="{Binding LevelText, Mode=OneWay}" Foreground="#7C87A0" />
-                                        <Run Text="  " Foreground="#5A6478" />
-                                        <Run Text="{Binding Message, Mode=OneWay}" Foreground="#DCE2EC" />
-                                    </TextBlock>
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
-                    </Grid>
-                </TabItem>
-                <TabItem Header="Обход DPI">
-                    <Grid Margin="0,12,6,0">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-
-                        <!-- Движок -->
-                        <Border Grid.Row="0" Background="{StaticResource PanelBrush}" CornerRadius="9" Padding="14" Margin="0,0,0,10">
-                            <StackPanel>
-                                <Border Background="#1A2FBF71" CornerRadius="8" Padding="12,8" Margin="0,0,0,10">
-                                    <StackPanel Orientation="Horizontal">
-                                        <Ellipse Width="9" Height="9" Fill="{Binding DpiActiveColor, Converter={StaticResource StringToBrush}}" VerticalAlignment="Center" />
-                                        <TextBlock Text="{Binding DpiActiveText}" Margin="10,0,0,0" VerticalAlignment="Center"
-                                                   FontWeight="SemiBold" Foreground="{Binding DpiActiveColor, Converter={StaticResource StringToBrush}}" />
-                                    </StackPanel>
-                                </Border>
-                                <Grid>
-                                    <StackPanel>
-                                        <TextBlock Style="{StaticResource H2}" Text="Движок zapret" />
-                                        <TextBlock Style="{StaticResource Muted}" Text="{Binding DpiEngineStatus}" Margin="0,3,0,0" />
-                                        <TextBlock Style="{StaticResource Muted}" Text="{Binding DpiUpdateStatus}" />
-                                    </StackPanel>
-                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
-                                        <Button Content="Обновить zapret" Command="{Binding DpiUpdateCommand}" Margin="0,0,6,0" />
-                                        <Button Content="Проверить" Command="{Binding DpiCheckCommand}" Margin="0,0,6,0" />
-                                        <Button Content="Стоп" Command="{Binding DpiStopCommand}" Margin="0,0,6,0" />
-                                        <Button Content="Снять принудительно" Command="{Binding DpiForceStopCommand}"
-                                                ToolTip="Убить все процессы zapret и выгрузить драйвер WinDivert — если трафик всё ещё перехватывается" />
-                                    </StackPanel>
-                                </Grid>
-                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                    <CheckBox Content="Проверять обновления при запуске" Margin="0,0,18,0" IsChecked="{Binding DpiCheckUpdates}" />
-                                    <CheckBox Content="Обновлять автоматически" Margin="0,0,18,0" IsChecked="{Binding DpiAutoUpdate}" />
-                                </StackPanel>
-                            </StackPanel>
-                        </Border>
-
-                        <!-- Цели -->
-                        <Border Grid.Row="1" Background="{StaticResource PanelBrush}" CornerRadius="9" Padding="14" Margin="0,0,0,10">
-                            <StackPanel>
-                                <TextBlock Style="{StaticResource H2}" Text="Что обходим" Margin="0,0,0,6" />
-                                 <Grid>
-                                     <TextBox Text="{Binding DpiTargetHosts, UpdateSourceTrigger=PropertyChanged}"
-                                              ToolTip="Сайты для обхода DPI: discord.com, youtube.com" />
-                                 </Grid>
-                                 <ComboBox Margin="0,6,0,0" MinHeight="38" FontSize="13"
-                                           Style="{StaticResource SearchableCombo}"
-                                          ItemsSource="{Binding DpiTargetsView}"
-                                          SelectedItem="{Binding SelectedDpiTarget}"
-                                          Tag="{Binding DpiTargetSearch, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                          DropDownOpened="VpnTargetsCombo_DropDownOpened"
-                                           DropDownClosed="DpiTargetsCombo_DropDownClosed"
-                                           ToolTip="Поиск сайта или программы для обхода DPI" />
-                                 <Expander Margin="0,8,0,0" IsExpanded="True"
-                                           HorizontalContentAlignment="Stretch"
-                                           Foreground="{StaticResource TextBrush}">
-                                     <Expander.Header>
-                                         <StackPanel Orientation="Horizontal">
-                                             <TextBlock Text="Добавленные сайты" FontWeight="SemiBold"
-                                                        Foreground="{StaticResource TextBrush}" />
-                                             <TextBlock Text="{Binding DpiSelectedTargetsCount, StringFormat=' ({0})'}"
-                                                        Foreground="{StaticResource MutedBrush}" />
-                                         </StackPanel>
-                                     </Expander.Header>
-                                     <Border Background="{StaticResource PanelAltBrush}" CornerRadius="6"
-                                             Padding="6" Margin="0,4,0,0">
-                                         <ScrollViewer MaxHeight="190" VerticalScrollBarVisibility="Auto"
-                                                       HorizontalScrollBarVisibility="Disabled">
-                                             <ItemsControl ItemsSource="{Binding DpiSelectedTargets}">
-                                                 <ItemsControl.ItemTemplate>
-                                                     <DataTemplate>
-                                                         <DockPanel Margin="0,1,0,1">
-                                                             <Button DockPanel.Dock="Right" Content="×" Width="24" Height="22"
-                                                                     Command="{Binding DataContext.RemoveDpiTargetCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                                     CommandParameter="{Binding}" />
-                                                             <TextBlock Text="{Binding}" VerticalAlignment="Center" Margin="6,0,0,0" />
-                                                         </DockPanel>
-                                                     </DataTemplate>
-                                                 </ItemsControl.ItemTemplate>
-                                             </ItemsControl>
-                                         </ScrollViewer>
-                                     </Border>
-                                 </Expander>
-                                <TextBlock Style="{StaticResource Muted}" Margin="0,10,0,4"
-                                           Text="Готовый список заблокированных сервисов РФ" />
-                                <ComboBox SelectedIndex="{Binding BlockedPresetIndex, Mode=TwoWay}" MinHeight="34">
-                                    <ComboBoxItem Content="Не использовать" />
-                                    <ComboBoxItem Content="Стандартный список (≈1,2 тыс. доменов)" />
-                                    <ComboBoxItem Content="Полный реестр РКН (≈1,7 млн доменов)" />
-                                </ComboBox>
-                                <TextBlock Style="{StaticResource Muted}" Margin="0,4,0,0" TextWrapping="Wrap"
-                                           Text="{Binding BlockedPresetHint}" />
-                                <TextBlock Style="{StaticResource Muted}" Margin="0,2,0,0" TextWrapping="Wrap"
-                                           Text="{Binding BlockedListStatus}" />
-                                <TextBlock Style="{StaticResource Muted}" Margin="0,6,0,0"
-                                           Text="Проверяется TLS-рукопожатие с этими доменами — именно его ломает DPI. Оценка: скорость ответа (отлично ≤ 100 мс, хорошо ≤ 200 мс и т.д.)." />
-
-                                <Border Background="{StaticResource PanelAltBrush}" CornerRadius="7" Padding="10" Margin="0,12,0,0">
-                                    <StackPanel>
-                                        <TextBlock Style="{StaticResource H2}" Text="Игры: серверы и порты" Margin="0,0,0,4" />
-                                        <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap"
-                                                   Text="Для игр вроде Path of Exile 2, которые провайдер режет на своих портах. Выберите процесс запущенной игры, войдите в неё и нажмите «Серверы игры»: программа возьмёт адреса и порты из её соединений. Затем выберите стратегию с пометкой «Игры»." />
-                                        <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0" Text="Процесс игры" />
-                                        <ComboBox Margin="0,4,0,0" MinHeight="32" MaxDropDownHeight="260"
-                                                  ItemsSource="{Binding Processes}"
-                                                  SelectedValuePath="Name"
-                                                  SelectedValue="{Binding DpiGameProcess, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                  IsTextSearchEnabled="True"
-                                                  ToolTip="Выберите запущенную игру — по её соединениям будут найдены серверы">
-                                            <ComboBox.ItemTemplate>
-                                                <DataTemplate>
-                                                    <TextBlock Text="{Binding DisplayName}" />
-                                                </DataTemplate>
-                                            </ComboBox.ItemTemplate>
-                                        </ComboBox>
-                                        <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0" Text="IP серверов игры (по одному в строке)" />
-                                        <TextBox Margin="0,4,0,0" MinHeight="58" AcceptsReturn="True" TextWrapping="NoWrap"
-                                                 VerticalScrollBarVisibility="Auto"
-                                                 Text="{Binding DpiGameIps, UpdateSourceTrigger=PropertyChanged}"
-                                                 ToolTip="IP-адреса серверов игры, по одному в строке" />
-                                        <Grid Margin="0,6,0,0">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                            <StackPanel Grid.Column="0" Margin="0,0,6,0">
-                                                <TextBlock Style="{StaticResource Muted}" Text="TCP-порты игры" />
-                                                <TextBox Margin="0,4,0,0"
-                                                         Text="{Binding DpiGameTcpPorts, UpdateSourceTrigger=PropertyChanged}"
-                                                         ToolTip="TCP-порты игры: 6112 или 6112,27015-27020" />
-                                            </StackPanel>
-                                            <StackPanel Grid.Column="1" Margin="0,0,6,0">
-                                                <TextBlock Style="{StaticResource Muted}" Text="UDP-порты игры" />
-                                                <TextBox Margin="0,4,0,0"
-                                                         Text="{Binding DpiGameUdpPorts, UpdateSourceTrigger=PropertyChanged}"
-                                                         ToolTip="UDP-порты игры (голос, бой): 3074 или 3478-3480" />
-                                            </StackPanel>
-                                            <Button Grid.Column="2" Content="Серверы игры" VerticalAlignment="Bottom"
-                                                    Command="{Binding DpiDetectGameCommand}"
-                                                    ToolTip="Взять IP-адреса и TCP-порты из соединений выбранной игры" />
-                                        </Grid>
-                                        <TextBlock Style="{StaticResource Muted}" Margin="0,6,0,0" TextWrapping="Wrap"
-                                                   Text="{Binding DpiGameSummary}" />
-                                        <TextBlock Style="{StaticResource Muted}" Margin="0,4,0,0" TextWrapping="Wrap"
-                                                   Text="Стратегия с пометкой «Игры» включает только игровой профиль — обход сайтов при этом выключается. Если блокировка идёт по IP, ни одна стратегия не поможет: нужен VPN с разделением по процессу." />
-                                    </StackPanel>
-                                </Border>
-                            </StackPanel>
-                        </Border>
-
-                        <!-- Стратегии -->
-                        <DataGrid Grid.Row="2" ItemsSource="{Binding DpiStrategies}" SelectedItem="{Binding SelectedDpiStrategy}"
-                                  IsReadOnly="True" EnableRowVirtualization="True">
-                            <DataGrid.Columns>
-                                <DataGridTextColumn Header="Стратегия" Binding="{Binding Name}" Width="*" MinWidth="180" />
-                                <DataGridTextColumn Header="Результат" Binding="{Binding Result}" Width="150" />
-                                <DataGridTextColumn Header="Оценка" Binding="{Binding ScoreText}" Width="110" />
-                                <DataGridTextColumn Header="Источник" Binding="{Binding Source}" Width="130" />
-                            </DataGrid.Columns>
-                        </DataGrid>
-
-                        <!-- Действия -->
-                        <Grid Grid.Row="3" Margin="0,10,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Orientation="Horizontal">
-                                <Button Content="Автоподбор лучшей" Style="{StaticResource AccentButton}" Command="{Binding DpiAutoSelectCommand}" Margin="0,0,8,0" />
-                                <Button Content="Применить" Command="{Binding DpiApplyCommand}" Margin="0,0,8,0" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
-                                <TextBlock Style="{StaticResource Muted}" Text="{Binding DpiProgressText}" />
-                                <TextBlock Style="{StaticResource Muted}" Margin="0,2,0,0">
-                                    <Run Text="Без обхода: " Foreground="#5A6478" />
-                                    <Run Text="{Binding DpiBaselineText, Mode=OneWay}" />
-                                    <Run Text="   Лучшая: " Foreground="#5A6478" />
-                                    <Run Text="{Binding DpiBestText, Mode=OneWay}" />
-                                </TextBlock>
-                            </StackPanel>
-                        </Grid>
-                    </Grid>
-                </TabItem>
             </TabControl>
-        </Grid>
 
-        <!-- ==== Статус-бар ==== -->
-        <Border Grid.Row="2" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
-            <Grid Margin="18,7">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="{Binding StatusText}" Style="{StaticResource Muted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                <TextBlock Grid.Column="1" Style="{StaticResource Muted}" Margin="0,0,18,0" VerticalAlignment="Center">
-                    <Run Text="Интерфейс: " />
-                    <Run Text="{Binding InterfaceText, Mode=OneWay}" Foreground="{StaticResource TextBrush}" />
-                </TextBlock>
-                <TextBlock Grid.Column="2" Style="{StaticResource Muted}" VerticalAlignment="Center">
-                    <Run Text="Время: " />
-                    <Run Text="{Binding ElapsedText, Mode=OneWay}" Foreground="{StaticResource TextBrush}" />
-                </TextBlock>
-            </Grid>
-        </Border>
+            <!-- Статус-бар -->
+            <Border Grid.Row="2" Background="{StaticResource PanelBrush}"
+                    BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="0,1,0,0">
+                <Grid Margin="24,7">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="{Binding StatusText}" Style="{StaticResource Muted}"
+                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Grid.Column="1" Style="{StaticResource Muted}" Margin="0,0,18,0" VerticalAlignment="Center">
+                        <Run Text="Интерфейс: " />
+                        <Run Text="{Binding InterfaceText, Mode=OneWay}" Foreground="{StaticResource TextBrush}" />
+                    </TextBlock>
+                    <TextBlock Grid.Column="2" Style="{StaticResource Muted}" VerticalAlignment="Center">
+                        <Run Text="Время: " />
+                        <Run Text="{Binding ElapsedText, Mode=OneWay}" Foreground="{StaticResource TextBrush}" />
+                    </TextBlock>
+                </Grid>
+            </Border>
+        </Grid>
     </Grid>
 </Window>
-
