@@ -160,14 +160,19 @@ Reality-ключе не указан отпечаток браузера, исп
 
 ```powershell
 # 1. поднять <Version> в src\ExitBoost.App\ExitBoost.App.csproj
-# 2. собрать всё, получить update.json + GitHub-манифест и сразу залить в GitHub
-powershell -ExecutionPolicy Bypass -File scripts\publish.ps1 -PublishGitHub
-# 3. загрузить ZIP, setup, CLI ZIP и update.json в GitLab Package Registry,
-#    затем создать релиз из publish\release\release.json (команды печатает скрипт)
-git tag v1.0.19
-git push gitlab v1.0.19
-git push origin v1.0.19
+# 2. собрать всё и опубликовать в GitLab и GitHub одной командой
+powershell -ExecutionPolicy Bypass -File scripts\publish.ps1 -PublishGitLab -PublishGitHub
+# 3. поставить тег и запушить его в оба репозитория
+git tag v1.0.20
+git push gitlab v1.0.20
+git push origin v1.0.20
 ```
+
+Для `-PublishGitLab` нужен токен GitLab со scope `api` (project access token
+или PAT). Скрипт берёт его из `GITLAB_API_TOKEN` или из файла
+`%USERPROFILE%\.exitboost\gitlab-token` (одна строка, вне репозитория). Токен
+загружает ZIP, setup, CLI ZIP и `update.json` в Package Registry, создаёт или
+обновляет релиз и проверяет, что `releases/permalink/latest` отдаёт новую версию.
 
 GitLab получает манифест `publish\release\update.json` (ссылки на Package
 Registry), GitHub — `publish\release\github\update.json` (ссылки на GitHub

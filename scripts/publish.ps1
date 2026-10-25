@@ -3,6 +3,10 @@
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\publish.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts\publish.ps1 -Version 1.0.18 -Notes "Что нового"
+#   powershell -ExecutionPolicy Bypass -File scripts\publish.ps1 -PublishGitLab -PublishGitHub
+#
+# Публикация в GitLab без ввода токена: положите PAT со scope api в
+# %USERPROFILE%\.exitboost\gitlab-token (одна строка) или задайте GITLAB_API_TOKEN.
 #
 # Собираем в staging-папку, затем подменяем готовые папки в publish\ —
 # так запущенная копия программы никогда не увидит полузаписанные файлы.
@@ -18,7 +22,8 @@ param(
     [string]$Channel = 'stable',
     [switch]$Mandatory,
     [switch]$SkipStop,
-    [switch]$PublishGitHub
+    [switch]$PublishGitHub,
+    [switch]$PublishGitLab
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,6 +38,17 @@ $packageName = 'exitboost'
 # GitHub — зеркало обновлений на случай, если GitLab недоступен.
 $githubOwner = 'Karpachv99'
 $githubRepo = 'ExitBoost'
+
+# Токен GitLab (scope api) для загрузки файлов и создания релиза.
+# Хранится вне репозитория, чтобы публикация шла без ручного ввода.
+$gitLabTokenPath = Join-Path $env:USERPROFILE '.exitboost\gitlab-token'
+function Get-GitLabToken {
+    if ($env:GITLAB_API_TOKEN) { return $env:GITLAB_API_TOKEN.Trim() }
+    if (Test-Path $gitLabTokenPath) {
+        return ([System.IO.File]::ReadAllText($gitLabTokenPath)).Trim()
+    }
+    return ''
+}
 
 if (-not $Version) {
     $m = Select-String -Path 'src\ExitBoost.App\ExitBoost.App.csproj' -Pattern '<Version>([^<]+)</Version>'
@@ -348,4 +364,63 @@ if ($PublishGitHub) {
     }
 
     Write-Host "GitHub: https://github.com/$githubOwner/$githubRepo/releases/tag/$tag" -ForegroundColor Green
+}
+
+if ($PublishGitLab) {
+    $token = Get-GitLabToken
+    if (-not $token) {
+        throw "Нет токена GitLab: задайте `$env:GITLAB_API_TOKEN или положите PAT со scope api в $gitLabTokenPath"
+    }
+
+    Write-Host ''
+    Write-Host "Публикация в GitLab..." -ForegroundColor Cyan
+
+    $api = "https://gitlab.com/api/v4/projects/$projectId"
+    $previousEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $responseName = 'release-response.json'
+    $responsePath = Join-Path $release $responseName
+    Push-Location $release
+    try {
+        foreach ($file in $files) {
+            $name = Split-Path $file -Leaf
+            Write-Host "  загрузка $name"
+            & curl.exe --http1.1 --ssl-no-revoke --fail --silent --show-error `
+                --request PUT --header "PRIVATE-TOKEN: $token" `
+                --upload-file $name "$api/packages/generic/$packageName/$Version/$name"
+            if ($LASTEXITCODE -ne 0) { throw "Не удалось загрузить $name в Package Registry" }
+        }
+
+        # POST создаёт релиз, PUT обновляет: повторный запуск не падает.
+        $code = & curl.exe --http1.1 --ssl-no-revoke --silent --show-error `
+            --request POST --header "PRIVATE-TOKEN: $token" `
+            --header 'Content-Type: application/json' `
+            --data-binary '@release.json' --output $responseName --write-out '%{http_code}' `
+            "$api/releases"
+        if ($code -eq '409') {
+            $code = & curl.exe --http1.1 --ssl-no-revoke --silent --show-error `
+                --request PUT --header "PRIVATE-TOKEN: $token" `
+                --header 'Content-Type: application/json' `
+                --data-binary '@release.json' --output $responseName --write-out '%{http_code}' `
+                "$api/releases/$tag"
+        }
+        if ($code -notin @('200', '201')) {
+            $detail = ''
+            if (Test-Path $responsePath) { $detail = ' ' + (Get-Content $responsePath -Raw) }
+            throw "Не удалось создать релиз GitLab (HTTP $code).$detail"
+        }
+
+        $latest = (& curl.exe --http1.1 --ssl-no-revoke --silent --fail "$api/releases/permalink/latest") -join "`n"
+        if ($LASTEXITCODE -ne 0) { throw 'Не удалось проверить последний релиз GitLab' }
+        $latestTag = ($latest | ConvertFrom-Json).tag_name
+        if ($latestTag -ne $tag) {
+            throw "GitLab отдаёт последним релиз $latestTag вместо $tag"
+        }
+    }
+    finally {
+        Pop-Location
+        $ErrorActionPreference = $previousEap
+    }
+
+    Write-Host "GitLab: https://gitlab.com/$projectPath/-/releases/$tag" -ForegroundColor Green
 }
