@@ -137,6 +137,24 @@ public static class SingBoxConfigBuilder
 
             if (!full)
             {
+                // Точный авто-fallback имеет приоритет над общим правилом
+                // process_name: только выбранная игра + конкретный IP сервера.
+                foreach (var endpoint in routing.GameEndpoints)
+                {
+                    string address = System.Net.IPAddress.Parse(endpoint.Address).AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? endpoint.Address + "/32" : endpoint.Address + "/128";
+                    w.WriteStartObject();
+                    w.WriteString("action", "route");
+                    w.WriteString("outbound", VpnOutboundTag);
+                    w.WritePropertyName("process_name");
+                    w.WriteStartArray();
+                    w.WriteStringValue(endpoint.ProcessName);
+                    w.WriteEndArray();
+                    w.WritePropertyName("ip_cidr");
+                    w.WriteStartArray();
+                    w.WriteStringValue(address);
+                    w.WriteEndArray();
+                    w.WriteEndObject();
+                }
                 if (routing.Domains.Count > 0)
                 {
                     w.WriteStartObject();

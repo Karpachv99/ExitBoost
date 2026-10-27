@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using ExitBoost.Core.Vpn;
 using Xunit;
 
@@ -440,6 +441,47 @@ public class VpnKeyParserTests
         Assert.Contains("\"default_domain_resolver\": \"local\"", json);
         Assert.Contains("\"final\": \"local\"", json); // остальной DNS — локальный
         Assert.Contains("youtube.com", json);
+    }
+
+    [Fact]
+    public void Config_Split_Routes_Only_Matched_Game_Process_And_Server_Ip()
+    {
+        var key = new VpnKey
+        {
+            Protocol = VpnProtocol.Vless,
+            Address = "vpn.example.com",
+            Port = 443,
+            UserId = "uuid",
+            Security = "tls",
+            Sni = "vpn.example.com"
+        };
+        var routing = new VpnRoutingConfig
+        {
+            Mode = "split",
+            Domains = ["opencode.ai"],
+            Processes = ["Game.exe"],
+            GameEndpoints = [new VpnGameEndpoint("Game.exe", "203.0.113.7")]
+        };
+
+        string json = SingBoxConfigBuilder.Build(key, routing);
+        using var document = JsonDocument.Parse(json);
+        var rules = document.RootElement.GetProperty("route").GetProperty("rules");
+        var fallback = rules.EnumerateArray().First(rule =>
+            rule.TryGetProperty("ip_cidr", out var cidr) && cidr.ToString().Contains("203.0.113.7"));
+
+        Assert.Equal("route", fallback.GetProperty("action").GetString());
+        Assert.Equal("vpn", fallback.GetProperty("outbound").GetString());
+        Assert.Equal("Game.exe", fallback.GetProperty("process_name")[0].GetString());
+        Assert.Equal("203.0.113.7/32", fallback.GetProperty("ip_cidr")[0].GetString());
+        int endpointRuleIndex = -1, generalProcessRuleIndex = -1, index = 0;
+        foreach (var rule in rules.EnumerateArray())
+        {
+            if (rule.TryGetProperty("ip_cidr", out _)) endpointRuleIndex = index;
+            else if (rule.TryGetProperty("process_name", out var process) && process.ToString().Contains("game.exe", StringComparison.OrdinalIgnoreCase))
+                generalProcessRuleIndex = index;
+            index++;
+        }
+        Assert.True(endpointRuleIndex >= 0 && endpointRuleIndex < generalProcessRuleIndex);
     }
 
     [Fact]

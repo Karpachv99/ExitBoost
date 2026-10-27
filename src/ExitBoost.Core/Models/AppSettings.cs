@@ -86,6 +86,12 @@ public sealed class AppSettings
     /// <summary>Имя процесса игры, по которому ищутся её серверы.</summary>
     public string DpiGameProcess { get; set; } = "";
 
+    /// <summary>Автоматически переводить только зависшие TCP-соединения игры на VPN.</summary>
+    public bool AutoGameVpnFallback { get; set; }
+
+    /// <summary>Имя процесса, отслеживаемого игровым автообходом VPN (не настройка DPI).</summary>
+    public string VpnGameProcess { get; set; } = "";
+
     /// <summary>TCP-порты игры для обхода DPI (через запятую).</summary>
     public string DpiGameTcpPorts { get; set; } = "";
 

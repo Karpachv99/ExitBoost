@@ -1369,6 +1369,20 @@
                             <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                                 <StackPanel>
                                     <TextBlock Text="VPN и сеть" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,8" />
+                                    <TextBlock Style="{StaticResource Muted}" Text="Игра для автообхода VPN" Margin="0,0,0,4" />
+                                    <DockPanel Margin="0,0,0,8">
+                                        <Button DockPanel.Dock="Right" Content="Обновить" Command="{Binding RefreshProcessesCommand}"
+                                                Margin="8,0,0,0" ToolTip="Обновить список запущенных процессов" />
+                                        <ComboBox ItemsSource="{Binding Processes}" SelectedValuePath="Name"
+                                                  DisplayMemberPath="DisplayName"
+                                                  SelectedValue="{Binding VpnGameProcess, UpdateSourceTrigger=PropertyChanged}"
+                                                  ToolTip="Выбор для VPN автообхода; не влияет на zapret/DPI" />
+                                    </DockPanel>
+                                    <CheckBox Content="Автообход недоступных игровых серверов через VPN (TCP и UDP)"
+                                              IsChecked="{Binding AutoGameVpnFallback}" Margin="0,0,0,5"
+                                              ToolTip="TCP: попытка зависла в SYN_SENT 8 секунд. UDP: игра повторно отправляет пакеты без ответов. Маршрут добавляется только для выбранной игры и IP сервера." />
+                                    <TextBlock Style="{StaticResource Muted}" Margin="22,0,0,8" TextWrapping="Wrap"
+                                               Text="Выбор игры независим от обхода DPI. UDP-блокировка определяется по сетевому обмену (повторы без ответов), это эвристика; остальные адреса остаются напрямую. После смены маршрута игре может потребоваться переподключиться." />
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />

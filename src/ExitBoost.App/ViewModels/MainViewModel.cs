@@ -373,6 +373,11 @@ public sealed class MainViewModel : ObservableObject
     private string _dpiGameTcpPorts = "";
     private string _dpiGameUdpPorts = "";
     private string _dpiGameProcess = "";
+    private bool _autoGameVpnFallback;
+    private string _vpnGameProcess = "";
+    private int _autoGameVpnCheckBusy;
+    private readonly Dictionary<string, DateTime> _gameTcpConnectAttempts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _autoGameVpnEndpoints = new(StringComparer.OrdinalIgnoreCase);
     private string _dpiBaselineText = "—";
     private string _dpiBestText = "—";
     private bool _isDpiBusy;
@@ -730,6 +735,35 @@ public sealed class MainViewModel : ObservableObject
             if (!Set(ref _dpiGameProcess, value ?? "")) return;
             _settings.Update(s => s.DpiGameProcess = _dpiGameProcess);
             OnPropertyChanged(nameof(DpiGameSummary));
+        }
+    }
+
+    /// <summary>Автоматически переводить зависшие TCP-подключения выбранной игры к конкретному IP через VPN.</summary>
+    public bool AutoGameVpnFallback
+    {
+        get => _autoGameVpnFallback;
+        set
+        {
+            if (!Set(ref _autoGameVpnFallback, value)) return;
+            _settings.Update(s => s.AutoGameVpnFallback = value);
+            if (!value)
+            {
+                _gameTcpConnectAttempts.Clear();
+                _autoGameVpnEndpoints.Clear();
+                App.VpnStore.Routing.GameEndpoints.Clear();
+            }
+        }
+    }
+
+    /// <summary>Процесс игры для VPN автообхода; не связан с настройками DPI/zapret.</summary>
+    public string VpnGameProcess
+    {
+        get => _vpnGameProcess;
+        set
+        {
+            if (!Set(ref _vpnGameProcess, value ?? "")) return;
+            _settings.Update(s => s.VpnGameProcess = _vpnGameProcess);
+            _gameTcpConnectAttempts.Clear();
         }
     }
 
@@ -1095,6 +1129,8 @@ public sealed class MainViewModel : ObservableObject
         _dpiTargetPort = s.DpiTargetPort > 0 ? s.DpiTargetPort : 443;
         _dpiGameIps = s.DpiGameIps;
         _dpiGameProcess = s.DpiGameProcess ?? "";
+        _autoGameVpnFallback = s.AutoGameVpnFallback;
+        _vpnGameProcess = s.VpnGameProcess ?? "";
         _dpiGameTcpPorts = s.DpiGameTcpPorts;
         _dpiGameUdpPorts = s.DpiGameUdpPorts;
         _dpiApplyOnConnect = s.DpiApplyOnConnect;
@@ -1296,6 +1332,8 @@ public sealed class MainViewModel : ObservableObject
         RefreshDpiStatus();
         RefreshVpnStatus();
         MaybeAutoUpdateBackgroundData();
+        if (AutoGameVpnFallback && IsVpnRunning && !_vpnBusy && App.Vpn.ActiveKey is not null)
+            _ = CheckGameVpnFallbackAsync();
 
         if (++_processRefreshTicks >= 5)
         {
@@ -1322,6 +1360,119 @@ public sealed class MainViewModel : ObservableObject
 
     private int _vpnProbeTicks;
     private volatile bool _vpnProbing;
+
+    /// <summary>
+    /// Detects a TCP connect stuck in SYN_SENT and applies a route for that exact
+    /// process+IP after eight seconds. Existing sockets cannot migrate; the game
+    /// must retry after sing-box has restarted with the new rule.
+    /// </summary>
+    private async Task CheckGameVpnFallbackAsync()
+    {
+        if (Interlocked.Exchange(ref _autoGameVpnCheckBusy, 1) != 0) return;
+        try
+        {
+            string processName = (VpnGameProcess ?? "").Trim();
+            if (processName.Length == 0 || App.VpnStore.Routing.Mode == "full") return;
+
+            string processBaseName = Path.GetFileNameWithoutExtension(processName);
+            var pids = ProcessInspector.FindPids(processBaseName);
+            if (pids.Count == 0)
+            {
+                _gameTcpConnectAttempts.Clear();
+                return;
+            }
+
+            if (!App.GameFlowMonitor.IsListening)
+                await App.GameFlowMonitor.StartAsync().ConfigureAwait(true);
+
+            DateTime now = DateTime.UtcNow;
+            var pending = pids.SelectMany(ConnectionTable.GetByPid)
+                .Where(c => c.Protocol == "TCP" && c.State == "SYN_SENT"
+                            && System.Net.IPAddress.TryParse(c.RemoteAddress, out var ip)
+                            && !System.Net.IPAddress.IsLoopback(ip)
+                            && !ip.IsIPv4MappedToIPv6 && !ip.IsIPv6LinkLocal)
+                .ToDictionary(c => c.Pid + "|" + c.LocalPort + "|" + c.RemoteAddress + ":" + c.RemotePort, c => c);
+
+            foreach (string stale in _gameTcpConnectAttempts.Keys.Where(k => !pending.ContainsKey(k)).ToList())
+                _gameTcpConnectAttempts.Remove(stale);
+
+            var candidates = new List<(string Address, string Reason)>();
+            foreach (var (attemptKey, connection) in pending)
+            {
+                if (!_gameTcpConnectAttempts.TryGetValue(attemptKey, out DateTime firstSeen))
+                {
+                    _gameTcpConnectAttempts[attemptKey] = now;
+                    continue;
+                }
+                if (now - firstSeen < TimeSpan.FromSeconds(8)) continue;
+                _gameTcpConnectAttempts.Remove(attemptKey);
+                candidates.Add((connection.RemoteAddress, $"TCP {connection.RemotePort}: SYN_SENT дольше 8 с"));
+            }
+
+            // UDP не имеет handshake. Считаем endpoint подозрительным, только если
+            // игра отправляет повторные датаграммы, но за окно наблюдения не получает ответов.
+            if (App.GameFlowMonitor.CanAnalyzeUdpReplies)
+                candidates.AddRange(pids.SelectMany(pid => App.GameFlowMonitor.GetUnansweredUdpFlows(pid))
+                    .Select(flow => (flow.RemoteAddress, $"UDP {flow.RemotePort}: {flow.OutboundPackets} исходящих пакетов без ответа")));
+
+            foreach (var (address, reason) in candidates.DistinctBy(c => c.Address, StringComparer.OrdinalIgnoreCase))
+            {
+                if (await ApplyGameVpnEndpointAsync(processBaseName + ".exe", address, reason).ConfigureAwait(true))
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Автообход игры: " + ex.Message);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _autoGameVpnCheckBusy, 0);
+        }
+    }
+
+    private async Task<bool> ApplyGameVpnEndpointAsync(string processExe, string address, string reason)
+    {
+        if (!System.Net.IPAddress.TryParse(address, out var ip) || System.Net.IPAddress.IsLoopback(ip)
+            || ip.IsIPv6LinkLocal || ip.IsIPv6Multicast || ip.IsIPv6UniqueLocal)
+            return false;
+
+        string endpointKey = processExe.ToLowerInvariant() + "|" + ip;
+        if (!_autoGameVpnEndpoints.Add(endpointKey)) return false;
+        _log.Warn($"Автообход игры: подозрительный сервер {ip} ({reason}); добавляю только его адрес через VPN");
+        _vpnBusy = true;
+        try
+        {
+            var activeKey = App.Vpn.ActiveKey;
+            if (activeKey is null) { _autoGameVpnEndpoints.Remove(endpointKey); return false; }
+
+            foreach (string saved in _autoGameVpnEndpoints)
+            {
+                int separator = saved.IndexOf('|');
+                if (separator <= 0) continue;
+                var rule = new VpnGameEndpoint(saved[..separator], saved[(separator + 1)..]);
+                if (!App.VpnStore.Routing.GameEndpoints.Contains(rule))
+                    App.VpnStore.Routing.GameEndpoints.Add(rule);
+            }
+            if (!await ConnectVpnCoreAsync(activeKey).ConfigureAwait(true))
+            {
+                _autoGameVpnEndpoints.Remove(endpointKey);
+                App.VpnStore.Routing.GameEndpoints.RemoveAll(e => e.ProcessName.Equals(processExe, StringComparison.OrdinalIgnoreCase)
+                    && e.Address.Equals(ip.ToString(), StringComparison.OrdinalIgnoreCase));
+                _log.Warn($"Не удалось применить игровой VPN-маршрут для {ip}");
+                return false;
+            }
+
+            _log.Info($"Точечное правило игры {processExe} → {ip} через VPN применено; прочий трафик остаётся напрямую");
+            return true;
+        }
+        finally
+        {
+            _vpnBusy = false;
+            VpnConnectCommand.RaiseCanExecuteChanged();
+            VpnDisconnectCommand.RaiseCanExecuteChanged();
+        }
+    }
 
     private void OnLogEntry(LogEntry entry)
     {
@@ -2731,6 +2882,13 @@ public sealed class MainViewModel : ObservableObject
         // Готовый список добавляем к доменам пользователя, не меняя их в интерфейсе:
         // выключение переключателя сразу возвращает прежний набор.
         var routing = App.VpnStore.Routing.Clone();
+        foreach (string saved in _autoGameVpnEndpoints)
+        {
+            int separator = saved.IndexOf('|');
+            if (separator <= 0) continue;
+            var rule = new VpnGameEndpoint(saved[..separator], saved[(separator + 1)..]);
+            if (!routing.GameEndpoints.Contains(rule)) routing.GameEndpoints.Add(rule);
+        }
         if (_blockedPreset != BlockedListPreset.Off && routing.Mode != "full")
         {
             var preset = _blockedPreset;
@@ -2759,6 +2917,9 @@ public sealed class MainViewModel : ObservableObject
     private async Task VpnDisconnectAsync()
     {
         await App.Vpn.DisconnectAsync().ConfigureAwait(true);
+        _autoGameVpnEndpoints.Clear();
+        _gameTcpConnectAttempts.Clear();
+        App.VpnStore.Routing.GameEndpoints.Clear();
         RefreshVpnStatus();
     }
 

@@ -2,6 +2,9 @@ using System.Text.Json;
 
 namespace ExitBoost.Core.Vpn;
 
+/// <summary>Точный адрес игрового сервера, который следует отправлять через VPN для указанного процесса.</summary>
+public sealed record VpnGameEndpoint(string ProcessName, string Address);
+
 /// <summary>Правила маршрутизации VPN-ключа (режим «только выбранные» или «весь трафик»).</summary>
 public sealed class VpnRoutingConfig
 {
@@ -14,6 +17,9 @@ public sealed class VpnRoutingConfig
     /// <summary>Имена процессов (.exe), чей трафик уходит через VPN в режиме split.</summary>
     public List<string> Processes { get; set; } = [];
 
+    /// <summary>Временные endpoint-правила автообхода игры; не сохраняются в keys.json.</summary>
+    public List<VpnGameEndpoint> GameEndpoints { get; set; } = [];
+
     /// <summary>MTU TUN-адаптера: 1400 подходит для PPPoE, 1500 — для обычного Ethernet.</summary>
     public int Mtu { get; set; } = 1400;
 
@@ -22,6 +28,7 @@ public sealed class VpnRoutingConfig
         Mode = Mode,
         Domains = [.. Domains],
         Processes = [.. Processes],
+        GameEndpoints = [.. GameEndpoints],
         Mtu = Mtu
     };
 
@@ -41,6 +48,13 @@ public sealed class VpnRoutingConfig
             .Select(p => p.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? p : p + ".exe")
             .Select(p => p.ToLowerInvariant())
             .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        GameEndpoints = GameEndpoints
+            .Where(e => !string.IsNullOrWhiteSpace(e.ProcessName) && System.Net.IPAddress.TryParse(e.Address, out _))
+            .Select(e => new VpnGameEndpoint(
+                e.ProcessName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? e.ProcessName : e.ProcessName + ".exe",
+                System.Net.IPAddress.Parse(e.Address).ToString()))
+            .Distinct()
             .ToList();
     }
 }
