@@ -375,6 +375,8 @@ public sealed class MainViewModel : ObservableObject
     private string _dpiGameProcess = "";
     private bool _autoGameVpnFallback;
     private string _vpnGameProcess = "";
+    private string _gameVpnStatusText = "Выберите процесс игры";
+    private string _gameVpnMonitorStatusText = "Монитор не запущен";
     private int _autoGameVpnCheckBusy;
     private readonly Dictionary<string, DateTime> _gameTcpConnectAttempts = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _autoGameVpnEndpoints = new(StringComparer.OrdinalIgnoreCase);
@@ -752,6 +754,7 @@ public sealed class MainViewModel : ObservableObject
                 _autoGameVpnEndpoints.Clear();
                 App.VpnStore.Routing.GameEndpoints.Clear();
             }
+            RefreshGameVpnStatus();
         }
     }
 
@@ -764,7 +767,20 @@ public sealed class MainViewModel : ObservableObject
             if (!Set(ref _vpnGameProcess, value ?? "")) return;
             _settings.Update(s => s.VpnGameProcess = _vpnGameProcess);
             _gameTcpConnectAttempts.Clear();
+            RefreshGameVpnStatus();
         }
+    }
+
+    public string GameVpnStatusText
+    {
+        get => _gameVpnStatusText;
+        private set => Set(ref _gameVpnStatusText, value);
+    }
+
+    public string GameVpnMonitorStatusText
+    {
+        get => _gameVpnMonitorStatusText;
+        private set => Set(ref _gameVpnMonitorStatusText, value);
     }
 
     /// <summary>IP-адреса серверов игры (по одному в строке).</summary>
@@ -1331,6 +1347,7 @@ public sealed class MainViewModel : ObservableObject
         UpdateElapsed();
         RefreshDpiStatus();
         RefreshVpnStatus();
+        RefreshGameVpnStatus();
         MaybeAutoUpdateBackgroundData();
         if (AutoGameVpnFallback && IsVpnRunning && !_vpnBusy && App.Vpn.ActiveKey is not null)
             _ = CheckGameVpnFallbackAsync();
@@ -1361,6 +1378,46 @@ public sealed class MainViewModel : ObservableObject
     private int _vpnProbeTicks;
     private volatile bool _vpnProbing;
 
+    private void RefreshGameVpnStatus()
+    {
+        string processName = (VpnGameProcess ?? "").Trim();
+        bool selected = processName.Length > 0;
+        bool running = selected && ProcessInspector.FindPids(Path.GetFileNameWithoutExtension(processName)).Count > 0;
+        bool flowMonitor = App.GameFlowMonitor.IsListening;
+        bool packetMonitor = App.GameFlowMonitor.CanAnalyzeGamePackets;
+
+        GameVpnMonitorStatusText = !flowMonitor
+            ? "Монитор потоков не запущен — нужны права администратора и WinDivert"
+            : packetMonitor
+                ? "Монитор TCP/UDP активен; содержимое пакетов не читается"
+                : "Потоки видны, но анализ ответов TCP/UDP недоступен";
+
+        if (!AutoGameVpnFallback)
+            GameVpnStatusText = "Автообход выключен";
+        else if (!selected)
+            GameVpnStatusText = "Игра не выбрана";
+        else if (!running)
+            GameVpnStatusText = $"Игра {Path.GetFileNameWithoutExtension(processName)} не запущена";
+        else if (!IsVpnRunning)
+            GameVpnStatusText = "Игра обнаружена, но VPN не подключён";
+        else if (App.VpnStore.Routing.Mode == "full")
+            GameVpnStatusText = "Весь трафик уже идёт через VPN";
+        else if (_autoGameVpnEndpoints.Count > 0)
+        {
+            string endpoints = string.Join(", ", _autoGameVpnEndpoints
+                .Select(value => value[(value.IndexOf('|') + 1)..])
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(5));
+            GameVpnStatusText = $"Обход применён: {endpoints} идут через VPN";
+        }
+        else if (!flowMonitor)
+            GameVpnStatusText = "Игра выбрана, но монитор не активен — автообход не сможет обнаружить серверы";
+        else if (!packetMonitor)
+            GameVpnStatusText = "Монитор работает, но без анализа ответов; ждём TCP SYN_SENT";
+        else
+            GameVpnStatusText = "Игра обнаружена · монитор активен · серверы пока напрямую, ожидаю признаки сбоя";
+    }
+
     /// <summary>
     /// Detects a TCP connect stuck in SYN_SENT and applies a route for that exact
     /// process+IP after eight seconds. Existing sockets cannot migrate; the game
@@ -1386,7 +1443,9 @@ public sealed class MainViewModel : ObservableObject
                 await App.GameFlowMonitor.StartAsync().ConfigureAwait(true);
 
             DateTime now = DateTime.UtcNow;
-            var pending = pids.SelectMany(ConnectionTable.GetByPid)
+            var gameConnections = pids.SelectMany(ConnectionTable.GetByPid).ToList();
+            App.GameFlowMonitor.TrackTcpConnections(gameConnections);
+            var pending = gameConnections
                 .Where(c => c.Protocol == "TCP" && c.State == "SYN_SENT"
                             && System.Net.IPAddress.TryParse(c.RemoteAddress, out var ip)
                             && !System.Net.IPAddress.IsLoopback(ip)
@@ -1409,9 +1468,16 @@ public sealed class MainViewModel : ObservableObject
                 candidates.Add((connection.RemoteAddress, $"TCP {connection.RemotePort}: SYN_SENT дольше 8 с"));
             }
 
+            // Для TCP, где handshake завершился, ловим длительный outbound data
+            // без входящих пакетов. Это покрывает зависание загрузки после connect.
+            if (App.GameFlowMonitor.CanAnalyzeGamePackets)
+                candidates.AddRange(pids.SelectMany(pid => App.GameFlowMonitor.GetStalledTcpFlows(pid))
+                    .Select(flow => (flow.RemoteAddress,
+                        $"TCP {flow.RemotePort}: {flow.OutboundPayloadPackets} исходящих пакетов данных без ответа после установки соединения")));
+
             // UDP не имеет handshake. Считаем endpoint подозрительным, только если
             // игра отправляет повторные датаграммы, но за окно наблюдения не получает ответов.
-            if (App.GameFlowMonitor.CanAnalyzeUdpReplies)
+            if (App.GameFlowMonitor.CanAnalyzeGamePackets)
                 candidates.AddRange(pids.SelectMany(pid => App.GameFlowMonitor.GetUnansweredUdpFlows(pid))
                     .Select(flow => (flow.RemoteAddress, $"UDP {flow.RemotePort}: {flow.OutboundPackets} исходящих пакетов без ответа")));
 

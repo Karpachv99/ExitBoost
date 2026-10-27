@@ -9,10 +9,12 @@ namespace ExitBoost.Core.Routing;
 public sealed record UdpFlowInfo(int ProcessId, string RemoteAddress, int LocalPort, int RemotePort, DateTime SeenUtc);
 public sealed record UdpFlowHealth(int ProcessId, string RemoteAddress, int LocalPort, int RemotePort,
     int OutboundPackets, int InboundPackets, DateTime FirstOutboundUtc, DateTime LastOutboundUtc);
+public sealed record TcpFlowHealth(int ProcessId, string RemoteAddress, int LocalPort, int RemotePort,
+    int OutboundPayloadPackets, DateTime FirstOutboundUtc, DateTime LastOutboundUtc);
 
 /// <summary>
-/// Слушает WinDivert FLOW-события. FLOW сообщает 5-tuple UDP-соединения и PID,
-/// не перехватывая и не изменяя пакеты. Записи хранятся только в памяти.
+/// Слушает WinDivert FLOW-события для сопоставления TCP/UDP 5-tuple с PID и
+/// пассивно считает направления/размеры пакетов. Содержимое не читается и трафик не меняется.
 /// </summary>
 public sealed class WinDivertFlowMonitor : IDisposable
 {
@@ -21,12 +23,15 @@ public sealed class WinDivertFlowMonitor : IDisposable
     private const int FlowEstablished = 1;
     private const int FlowDeleted = 2;
     private const int UdpProtocol = 17;
+    private const int TcpProtocol = 6;
     private const ulong SniffAndReceiveOnly = 0x0001 | 0x0004;
     private static readonly TimeSpan Retention = TimeSpan.FromMinutes(10);
 
     private readonly string _engineDirectory;
     private readonly ConcurrentDictionary<ulong, UdpFlowInfo> _flows = new();
     private readonly ConcurrentDictionary<string, UdpFlowInfo> _flowsByTuple = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<ulong, UdpFlowInfo> _tcpFlows = new();
+    private readonly ConcurrentDictionary<string, UdpFlowInfo> _tcpFlowsByTuple = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, UdpPacketHistory> _packetHistory = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _sync = new();
     private IntPtr _library;
@@ -49,7 +54,7 @@ public sealed class WinDivertFlowMonitor : IDisposable
     }
 
     /// <summary>True when the passive UDP packet observer is active for request/reply analysis.</summary>
-    public bool CanAnalyzeUdpReplies
+    public bool CanAnalyzeGamePackets
     {
         get { lock (_sync) return IsHandleValid(_networkHandle) && _networkWorker is { IsCompleted: false }; }
     }
@@ -99,12 +104,12 @@ public sealed class WinDivertFlowMonitor : IDisposable
 
                 _stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 _worker = Task.Run(() => ReceiveLoop(_stop.Token));
-                _networkHandle = _open("udp", NetworkLayer, 0, SniffAndReceiveOnly);
+                _networkHandle = _open("tcp or udp", NetworkLayer, 0, SniffAndReceiveOnly);
                 if (IsHandleValid(_networkHandle))
                     _networkWorker = Task.Run(() => ReceiveNetworkLoop(_stop.Token));
                 else
-                    Log?.Invoke($"UDP-монитор: не удалось запустить пассивный анализ ответов (WinDivert, код {Marshal.GetLastPInvokeError()}); авто-fallback UDP недоступен");
-                Log?.Invoke("Монитор игр запущен: сопоставление UDP-потоков с PID и пассивный учёт пакетов запрос/ответ (содержимое не читается)");
+                    Log?.Invoke($"Монитор игр: не удалось запустить пассивный анализ TCP/UDP пакетов (WinDivert, код {Marshal.GetLastPInvokeError()}); авто-fallback по ответам недоступен");
+                Log?.Invoke("Монитор игр запущен: сопоставление TCP/UDP потоков с PID и пассивный учёт пакетов запрос/ответ (содержимое не читается)");
                 return Task.FromResult(true);
             }
             catch (Exception ex)
@@ -135,13 +140,13 @@ public sealed class WinDivertFlowMonitor : IDisposable
     /// </summary>
     public IReadOnlyList<UdpFlowHealth> GetUnansweredUdpFlows(int processId, TimeSpan? window = null)
     {
-        if (!CanAnalyzeUdpReplies) return [];
+        if (!CanAnalyzeGamePackets) return [];
         DateTime now = DateTime.UtcNow;
         TimeSpan interval = window ?? TimeSpan.FromSeconds(12);
         var result = new List<UdpFlowHealth>();
         foreach (var flow in GetUdpFlows(processId))
         {
-            string key = TupleKey(flow.RemoteAddress, flow.LocalPort, flow.RemotePort);
+            string key = TupleKey("udp", flow.RemoteAddress, flow.LocalPort, flow.RemotePort);
             if (!_packetHistory.TryGetValue(key, out var history)) continue;
             var snapshot = history.Snapshot(now - interval);
             if (snapshot.OutboundPackets >= 5 && snapshot.InboundPackets == 0
@@ -151,6 +156,66 @@ public sealed class WinDivertFlowMonitor : IDisposable
                     snapshot.OutboundPackets, snapshot.InboundPackets, snapshot.FirstOutboundUtc, snapshot.LastOutboundUtc));
         }
         return result;
+    }
+
+    /// <summary>
+    /// Established TCP flows with repeated outgoing payload and no incoming
+    /// packets for a sustained interval. Helps catch app-level stalls after SYN succeeds.
+    /// </summary>
+    public IReadOnlyList<TcpFlowHealth> GetStalledTcpFlows(int processId, TimeSpan? window = null)
+    {
+        if (!CanAnalyzeGamePackets) return [];
+        DateTime now = DateTime.UtcNow;
+        TimeSpan interval = window ?? TimeSpan.FromSeconds(12);
+        var result = new List<TcpFlowHealth>();
+        foreach (var flow in _tcpFlowsByTuple.Values.Where(f => f.ProcessId == processId && now - f.SeenUtc <= Retention))
+        {
+            string key = TupleKey("tcp", flow.RemoteAddress, flow.LocalPort, flow.RemotePort);
+            if (!_packetHistory.TryGetValue(key, out var history)) continue;
+            var snapshot = history.Snapshot(now - interval);
+            if (snapshot.OutboundPackets >= 3 && snapshot.InboundPackets == 0
+                && snapshot.FirstOutboundUtc != default
+                && now - snapshot.FirstOutboundUtc >= TimeSpan.FromSeconds(8))
+                result.Add(new TcpFlowHealth(processId, flow.RemoteAddress, flow.LocalPort, flow.RemotePort,
+                    snapshot.OutboundPackets, snapshot.FirstOutboundUtc, snapshot.LastOutboundUtc));
+        }
+        return result
+            .GroupBy(f => (f.RemoteAddress, f.LocalPort, f.RemotePort))
+            .Select(g => g.OrderByDescending(f => f.LastOutboundUtc).First())
+            .ToList();
+    }
+
+    /// <summary>Registers already-established process TCP connections so monitoring can start mid-session.</summary>
+    public void TrackTcpConnections(IEnumerable<ConnectionInfo> connections)
+    {
+        var snapshot = connections.ToList();
+        var processIds = snapshot.Select(c => c.Pid).ToHashSet();
+        var activeKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        DateTime now = DateTime.UtcNow;
+        foreach (var connection in snapshot)
+        {
+            if (connection.Protocol != "TCP" || connection.State != "ESTABLISHED"
+                || connection.RemotePort <= 0 || !IPAddress.TryParse(connection.RemoteAddress, out var address)
+                || IPAddress.IsLoopback(address) || address.IsIPv6LinkLocal || address.IsIPv6Multicast)
+                continue;
+
+            if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+
+            var info = new UdpFlowInfo(connection.Pid, address.ToString(), connection.LocalPort,
+                connection.RemotePort, now);
+            string key = TupleKey("tcp", info.RemoteAddress, info.LocalPort, info.RemotePort);
+            activeKeys.Add(key);
+            _tcpFlowsByTuple[key] = info;
+            _packetHistory.GetOrAdd(key, _ => new UdpPacketHistory("tcp"));
+        }
+
+        foreach (var pair in _tcpFlowsByTuple)
+        {
+            string key = TupleKey("tcp", pair.Value.RemoteAddress, pair.Value.LocalPort, pair.Value.RemotePort);
+            if (!processIds.Contains(pair.Value.ProcessId) || activeKeys.Contains(key)) continue;
+            _tcpFlowsByTuple.TryRemove(pair.Key, out _);
+            _packetHistory.TryRemove(key, out _);
+        }
     }
 
     private void ReceiveLoop(CancellationToken ct)
@@ -176,14 +241,20 @@ public sealed class WinDivertFlowMonitor : IDisposable
                 var evt = Marshal.PtrToStructure<DivertAddress>(address);
                 int eventType = (int)((evt.LayerEventFlags >> 8) & 0xff);
                 var flow = evt.Flow;
-                if (flow.Protocol != UdpProtocol || flow.ProcessId == 0) continue;
+                if (flow.Protocol is not (UdpProtocol or TcpProtocol) || flow.ProcessId == 0) continue;
 
                 if (eventType == FlowDeleted)
                 {
                     if (_flows.TryRemove(flow.EndpointId, out var removed))
                     {
-                        string key = TupleKey(removed.RemoteAddress, removed.LocalPort, removed.RemotePort);
+                        string key = TupleKey("udp", removed.RemoteAddress, removed.LocalPort, removed.RemotePort);
                         _flowsByTuple.TryRemove(key, out _);
+                        _packetHistory.TryRemove(key, out _);
+                    }
+                    if (_tcpFlows.TryRemove(flow.EndpointId, out var removedTcp))
+                    {
+                        string key = TupleKey("tcp", removedTcp.RemoteAddress, removedTcp.LocalPort, removedTcp.RemotePort);
+                        _tcpFlowsByTuple.TryRemove(key, out _);
                         _packetHistory.TryRemove(key, out _);
                     }
                     continue;
@@ -195,11 +266,20 @@ public sealed class WinDivertFlowMonitor : IDisposable
                 if (string.IsNullOrWhiteSpace(remote) || remote == "::" || remote == "0.0.0.0") continue;
 
                 var info = new UdpFlowInfo((int)flow.ProcessId, remote, flow.LocalPort, flow.RemotePort, DateTime.UtcNow);
-                _flows[flow.EndpointId] = info;
-                string tupleKey = TupleKey(remote, flow.LocalPort, flow.RemotePort);
-                _flowsByTuple[tupleKey] = info;
-                _packetHistory.GetOrAdd(tupleKey, _ => new UdpPacketHistory());
-                if (_flows.Count > 4096) PruneExpired();
+                string protocol = flow.Protocol == TcpProtocol ? "tcp" : "udp";
+                string tupleKey = TupleKey(protocol, remote, flow.LocalPort, flow.RemotePort);
+                if (flow.Protocol == TcpProtocol)
+                {
+                    _tcpFlows[flow.EndpointId] = info;
+                    _tcpFlowsByTuple[tupleKey] = info;
+                }
+                else
+                {
+                    _flows[flow.EndpointId] = info;
+                    _flowsByTuple[tupleKey] = info;
+                }
+                _packetHistory.GetOrAdd(tupleKey, _ => new UdpPacketHistory(protocol));
+                if (_flows.Count + _tcpFlows.Count > 4096) PruneExpired();
             }
         }
         catch (Exception ex)
@@ -236,14 +316,14 @@ public sealed class WinDivertFlowMonitor : IDisposable
 
                 var evt = Marshal.PtrToStructure<DivertAddress>(address);
                 bool outbound = (evt.LayerEventFlags & (1u << 17)) != 0;
-                if (!TryParseUdpPacket(packet, receivedLength, outbound, out var observation)) continue;
+                if (!TryParseNetworkPacket(packet, receivedLength, outbound, out var observation)) continue;
 
-                string key = outbound
-                    ? TupleKey(observation.RemoteAddress, observation.LocalPort, observation.RemotePort)
-                    : TupleKey(observation.RemoteAddress, observation.LocalPort, observation.RemotePort);
-                if (_flowsByTuple.ContainsKey(key)
-                    && _packetHistory.TryGetValue(key, out var history))
-                    history.Add(outbound, DateTime.UtcNow);
+                string key = TupleKey(observation.Protocol, observation.RemoteAddress, observation.LocalPort, observation.RemotePort);
+                bool knownFlow = observation.Protocol == "tcp"
+                    ? _tcpFlowsByTuple.ContainsKey(key)
+                    : _flowsByTuple.ContainsKey(key);
+                if (knownFlow && _packetHistory.TryGetValue(key, out var history))
+                    history.Add(outbound, observation.PayloadBytes, DateTime.UtcNow);
             }
         }
         catch (Exception ex)
@@ -257,20 +337,26 @@ public sealed class WinDivertFlowMonitor : IDisposable
         }
     }
 
-    private bool TryParseUdpPacket(IntPtr packet, uint length, bool outbound, out UdpPacketObservation observation)
+    private bool TryParseNetworkPacket(IntPtr packet, uint length, bool outbound, out PacketObservation observation)
     {
         observation = default;
         if (length < 20) return false;
         int version = Marshal.ReadByte(packet) >> 4;
         int transportOffset;
+        int packetLength;
+        int transportProtocol;
         IPAddress source, destination;
 
         if (version == 4)
         {
             int headerLength = (Marshal.ReadByte(packet) & 0x0f) * 4;
-            if (headerLength < 20 || length < headerLength + 8 || Marshal.ReadByte(packet, 9) != UdpProtocol) return false;
+            if (headerLength < 20 || length < headerLength + 8) return false;
             int fragment = (Marshal.ReadByte(packet, 6) << 8) | Marshal.ReadByte(packet, 7);
             if ((fragment & 0x1fff) != 0) return false;
+            transportProtocol = Marshal.ReadByte(packet, 9);
+            if (transportProtocol is not (UdpProtocol or TcpProtocol)) return false;
+            packetLength = (Marshal.ReadByte(packet, 2) << 8) | Marshal.ReadByte(packet, 3);
+            if (packetLength < headerLength + (transportProtocol == TcpProtocol ? 20 : 8) || packetLength > length) return false;
             byte[] src = new byte[4], dst = new byte[4];
             Marshal.Copy(packet + 12, src, 0, 4);
             Marshal.Copy(packet + 16, dst, 0, 4);
@@ -283,9 +369,11 @@ public sealed class WinDivertFlowMonitor : IDisposable
             if (length < 48) return false;
             byte nextHeader = Marshal.ReadByte(packet, 6);
             transportOffset = 40;
+            packetLength = 40 + ((Marshal.ReadByte(packet, 4) << 8) | Marshal.ReadByte(packet, 5));
+            if (packetLength > length) return false;
             // Поддерживаем обычные IPv6-заголовки и типичные extension headers.
             int extensions = 0;
-            while (nextHeader != UdpProtocol && extensions++ < 8)
+            while (nextHeader is not (UdpProtocol or TcpProtocol) && extensions++ < 8)
             {
                 if (nextHeader is not (0 or 43 or 44 or 60 or 51) || length < transportOffset + 2) return false;
                 byte current = nextHeader;
@@ -293,7 +381,7 @@ public sealed class WinDivertFlowMonitor : IDisposable
                 int extensionLength = current == 44 ? 8
                     : current == 51 ? (Marshal.ReadByte(packet, transportOffset + 1) + 2) * 4
                     : (Marshal.ReadByte(packet, transportOffset + 1) + 1) * 8;
-                if (extensionLength <= 0 || length < transportOffset + extensionLength) return false;
+                if (extensionLength <= 0 || packetLength < transportOffset + extensionLength) return false;
                 if (current == 44)
                 {
                     int fragmentOffset = (Marshal.ReadByte(packet, transportOffset + 2) << 8) | Marshal.ReadByte(packet, transportOffset + 3);
@@ -301,7 +389,9 @@ public sealed class WinDivertFlowMonitor : IDisposable
                 }
                 transportOffset += extensionLength;
             }
-            if (nextHeader != UdpProtocol || length < transportOffset + 8) return false;
+            if (nextHeader is not (UdpProtocol or TcpProtocol)
+                || packetLength < transportOffset + (nextHeader == TcpProtocol ? 20 : 8)) return false;
+            transportProtocol = nextHeader;
             byte[] src = new byte[16], dst = new byte[16];
             Marshal.Copy(packet + 8, src, 0, 16);
             Marshal.Copy(packet + 24, dst, 0, 16);
@@ -314,39 +404,60 @@ public sealed class WinDivertFlowMonitor : IDisposable
         int destinationPort = (Marshal.ReadByte(packet, transportOffset + 2) << 8) | Marshal.ReadByte(packet, transportOffset + 3);
         if (sourcePort == 0 || destinationPort == 0) return false;
 
+        int payloadBytes = 0;
+        if (transportProtocol == TcpProtocol)
+        {
+            int tcpHeaderLength = (Marshal.ReadByte(packet, transportOffset + 12) >> 4) * 4;
+            if (tcpHeaderLength < 20 || packetLength < transportOffset + tcpHeaderLength) return false;
+            payloadBytes = packetLength - transportOffset - tcpHeaderLength;
+        }
+        else
+        {
+            int udpLength = (Marshal.ReadByte(packet, transportOffset + 4) << 8) | Marshal.ReadByte(packet, transportOffset + 5);
+            if (udpLength < 8 || packetLength < transportOffset + udpLength) return false;
+            payloadBytes = udpLength - 8;
+        }
+
         string remoteAddress = (outbound ? destination : source) is { IsIPv4MappedToIPv6: true } mapped
             ? mapped.MapToIPv4().ToString()
             : (outbound ? destination : source).ToString();
         observation = outbound
-            ? new UdpPacketObservation(remoteAddress, sourcePort, destinationPort)
-            : new UdpPacketObservation(remoteAddress, destinationPort, sourcePort);
+            ? new PacketObservation(transportProtocol == TcpProtocol ? "tcp" : "udp", remoteAddress, sourcePort, destinationPort, payloadBytes)
+            : new PacketObservation(transportProtocol == TcpProtocol ? "tcp" : "udp", remoteAddress, destinationPort, sourcePort, payloadBytes);
         return true;
     }
 
-    private static string TupleKey(string remoteAddress, int localPort, int remotePort) =>
-        $"{remoteAddress}|{localPort}|{remotePort}";
+    private static string TupleKey(string protocol, string remoteAddress, int localPort, int remotePort) =>
+        $"{protocol}|{remoteAddress}|{localPort}|{remotePort}";
 
-    private readonly record struct UdpPacketObservation(string RemoteAddress, int LocalPort, int RemotePort);
+    private readonly record struct PacketObservation(string Protocol, string RemoteAddress, int LocalPort, int RemotePort, int PayloadBytes);
 
     private sealed class UdpPacketHistory
     {
+        private readonly string _protocol;
         private readonly object _gate = new();
         private int _outboundPackets;
         private DateTime _firstOutboundUtc;
         private DateTime _lastOutboundUtc;
         private DateTime _lastInboundUtc;
 
-        public void Add(bool outbound, DateTime time)
+        public UdpPacketHistory(string protocol) => _protocol = protocol;
+
+        public void Add(bool outbound, int payloadBytes, DateTime time)
         {
             lock (_gate)
             {
                 if (!outbound)
                 {
+                    // TCP ACK-only packets confirm transport delivery but don't
+                    // prove the game server is returning application data.
+                    if (_protocol == "tcp" && payloadBytes == 0) return;
                     _lastInboundUtc = time;
                     _outboundPackets = 0;
                     _firstOutboundUtc = default;
                     return;
                 }
+                if (_protocol == "tcp" && payloadBytes == 0) return;
                 if (_outboundPackets == 0) _firstOutboundUtc = time;
                 _outboundPackets = Math.Min(_outboundPackets + 1, 1_000_000);
                 _lastOutboundUtc = time;
@@ -391,8 +502,15 @@ public sealed class WinDivertFlowMonitor : IDisposable
         foreach (var pair in _flows)
         {
             if (pair.Value.SeenUtc >= cutoff || !_flows.TryRemove(pair.Key, out var removed)) continue;
-            string key = TupleKey(removed.RemoteAddress, removed.LocalPort, removed.RemotePort);
+            string key = TupleKey("udp", removed.RemoteAddress, removed.LocalPort, removed.RemotePort);
             _flowsByTuple.TryRemove(key, out _);
+            _packetHistory.TryRemove(key, out _);
+        }
+        foreach (var pair in _tcpFlows)
+        {
+            if (pair.Value.SeenUtc >= cutoff || !_tcpFlows.TryRemove(pair.Key, out var removed)) continue;
+            string key = TupleKey("tcp", removed.RemoteAddress, removed.LocalPort, removed.RemotePort);
+            _tcpFlowsByTuple.TryRemove(key, out _);
             _packetHistory.TryRemove(key, out _);
         }
     }
@@ -448,6 +566,8 @@ public sealed class WinDivertFlowMonitor : IDisposable
             _networkWorker = null;
             _flows.Clear();
             _flowsByTuple.Clear();
+            _tcpFlows.Clear();
+            _tcpFlowsByTuple.Clear();
             _packetHistory.Clear();
             ReleaseLibrary();
         }
