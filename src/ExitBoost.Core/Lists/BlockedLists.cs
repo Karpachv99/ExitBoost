@@ -54,6 +54,20 @@ public static class BlockedLists
     private static readonly TimeSpan RefreshAfter = TimeSpan.FromDays(7);
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(5) };
 
+    /// <summary>Через сколько дней локальная копия списка считается устаревшей.</summary>
+    public static TimeSpan RefreshPeriod => RefreshAfter;
+
+    /// <summary>
+    /// Информация о локальной копии без обращения к сети: сколько доменов и когда
+    /// обновлён. null — копии ещё нет.
+    /// </summary>
+    public static BlockedListInfo? Cached(BlockedListPreset preset)
+    {
+        if (preset == BlockedListPreset.Off) return null;
+        string path = ListPath(preset);
+        return File.Exists(path) ? Inspect(preset, path, fromCache: true, error: null) : null;
+    }
+
     /// <summary>Человекочитаемое имя списка.</summary>
     public static string DisplayName(BlockedListPreset preset) => preset switch
     {

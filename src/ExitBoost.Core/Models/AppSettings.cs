@@ -107,6 +107,20 @@ public sealed class AppSettings
     /// <summary>Запускать движок zapret вместе с приложением (служба).</summary>
     public bool DpiRunAsService { get; set; }
 
+    // ------------------------------------------------------------ списки и подписки
+
+    /// <summary>Автоматически обновлять готовые списки РКН (раз в неделю, в фоне).</summary>
+    public bool AutoUpdateLists { get; set; } = true;
+
+    /// <summary>Автоматически обновлять ключи по сохранённым ссылкам-подпискам.</summary>
+    public bool AutoUpdateVpnSubscriptions { get; set; } = true;
+
+    /// <summary>Ключ (локация), выбранный последним: его показывает шапка и кнопка питания.</summary>
+    public string? VpnLastKeyId { get; set; }
+
+    /// <summary>Последняя выбранная страна — на случай, если ключ из подписки исчез.</summary>
+    public string? VpnLastCountry { get; set; }
+
     // ------------------------------------------------------------ обновления
 
     /// <summary>Официальный репозиторий: обновления всегда берутся только отсюда.</summary>

@@ -11,6 +11,12 @@ public sealed class VpnKey
     /// <summary>Название подписки/набора ключей, из которого добавлен ключ.</summary>
     public string SubscriptionName { get; set; } = "";
 
+    /// <summary>
+    /// Ссылка-подписка, из которой получен ключ (пусто — ключ добавлен вручную).
+    /// По ней набор ключей обновляется автоматически.
+    /// </summary>
+    public string SubscriptionUrl { get; set; } = "";
+
     public VpnProtocol Protocol { get; set; }
 
     /// <summary>Адрес сервера (домен или IP).</summary>

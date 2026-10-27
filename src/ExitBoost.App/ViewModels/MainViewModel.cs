@@ -91,7 +91,7 @@ public sealed class MainViewModel : ObservableObject
         VpnAddKeyCommand = new RelayCommand(_ => { AddVpnKey(); return Task.CompletedTask; });
         VpnRemoveKeyCommand = new RelayCommand(_ => { RemoveVpnKey(); return Task.CompletedTask; }, _ => SelectedVpnKey is not null);
         VpnPickTargetsCommand = new RelayCommand(() => PickVpnTargets());
-          VpnConnectCommand = new RelayCommand(_ => VpnConnectAsync(), _ => !_vpnBusy && !IsVpnRunning);
+          VpnConnectCommand = new RelayCommand(_ => VpnConnectAsync(), _ => !_vpnBusy);
          RemoveDpiTargetCommand = new RelayCommand(p => { RemoveDpiTarget(p); return Task.CompletedTask; });
          RemoveVpnSiteCommand = new RelayCommand(p => { RemoveVpnSite(p); return Task.CompletedTask; });
          RemoveVpnProgramCommand = new RelayCommand(p => { RemoveVpnProgram(p); return Task.CompletedTask; });
@@ -111,6 +111,9 @@ public sealed class MainViewModel : ObservableObject
         SpeedTestCommand = new RelayCommand(_ => RunSpeedTestAsync(), _ => !IsSpeedTestRunning);
         NavigateCommand = new RelayCommand(p => { NavigateTo(p); return Task.CompletedTask; });
         QuickServiceCommand = new RelayCommand(p => { AddQuickService(p); return Task.CompletedTask; });
+        SelectCountryCommand = new RelayCommand(p => { SelectCountry(p); return Task.CompletedTask; });
+        RefreshListsCommand = new RelayCommand(_ => RefreshListsAsync(), _ => !IsListsBusy);
+        RefreshSubscriptionsCommand = new RelayCommand(_ => RefreshVpnSubscriptionsAsync(force: true), _ => !IsSubscriptionsBusy);
 
         _probing.StatusUpdated += OnStatusUpdated;
         _log.EntryAdded += OnLogEntry;
@@ -125,8 +128,14 @@ public sealed class MainViewModel : ObservableObject
         DpiTargetsView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(VpnTargetPickItem.Group)));
         BuildVpnTargets();
         VpnKeysView = CollectionViewSource.GetDefaultView(VpnKeyRows);
+        // Двойная группировка: сначала ключ/подписка, внутри — страны.
+        VpnKeysView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(VpnKeyItemViewModel.Group)));
         VpnKeysView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(VpnKeyItemViewModel.CountryGroup)));
+        VpnKeysView.SortDescriptions.Add(new SortDescription(nameof(VpnKeyItemViewModel.Group), ListSortDirection.Ascending));
         VpnKeysView.SortDescriptions.Add(new SortDescription(nameof(VpnKeyItemViewModel.CountryGroup), ListSortDirection.Ascending));
+        VpnPickView = new ListCollectionView(VpnKeyRows);
+        VpnPickView.SortDescriptions.Add(new SortDescription(nameof(VpnKeyItemViewModel.CountryGroup), ListSortDirection.Ascending));
+        VpnPickView.SortDescriptions.Add(new SortDescription(nameof(VpnKeyItemViewModel.Ping), ListSortDirection.Ascending));
         DpiGameStrategiesView = new ListCollectionView(DpiStrategies)
         {
             Filter = o => o is DpiStrategyItemViewModel item && item.IsGame
@@ -140,6 +149,8 @@ public sealed class MainViewModel : ObservableObject
         FillDpiStrategies(App.ZapretCatalog);
         VpnReloadFromStore();
         _ = RefreshBlockedListAsync(force: false);
+        if (_settings.Current.AutoUpdateVpnSubscriptions)
+            _ = RefreshVpnSubscriptionsAsync(force: false);
         DpiEngineStatus = App.Zapret.IsInstalled
             ? $"установлен ({App.Zapret.InstalledVersion?[..Math.Min(8, App.Zapret.InstalledVersion.Length)]})"
             : "не установлен — нажмите «Обновить zapret»";
@@ -192,11 +203,20 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand VpnInstallCoreCommand { get; }
     public RelayCommand SpeedTestCommand { get; }
 
-    /// <summary>Переход на страницу по номеру (0 — главная, 1 — локации, 2 — игры, 3 — DPI, 4 — журнал, 5 — настройки).</summary>
+    /// <summary>Переход на страницу по номеру (0 — главная, 1 — локации, 2 — обход DPI, 3 — журнал, 4 — настройки).</summary>
     public RelayCommand NavigateCommand { get; }
 
     /// <summary>Быстрое добавление сервиса в список VPN (параметр — домены через «|»).</summary>
     public RelayCommand QuickServiceCommand { get; }
+
+    /// <summary>Выбор страны с плитки на главной (параметр — <see cref="VpnCountryTileViewModel"/>).</summary>
+    public RelayCommand SelectCountryCommand { get; }
+
+    /// <summary>Принудительное обновление готовых списков РКН.</summary>
+    public RelayCommand RefreshListsCommand { get; }
+
+    /// <summary>Принудительное обновление ключей по сохранённым подпискам.</summary>
+    public RelayCommand RefreshSubscriptionsCommand { get; }
 
     // ---------------------------------------------------------- свойства
 
@@ -365,6 +385,17 @@ public sealed class MainViewModel : ObservableObject
     private BlockedListInfo? _blockedListInfo;
     private int _blockedListBusy;
 
+    // Автообновление списков и подписок.
+    private bool _listsAutoUpdate = true;
+    private bool _autoUpdateSubscriptions = true;
+    private string _listsUpdatedText = "";
+    private string _subscriptionsStatusText = "";
+    private bool _isListsBusy;
+    private bool _isSubscriptionsBusy;
+    private int _subscriptionsBusy;
+    private DateTime _lastListsCheck = DateTime.UtcNow;
+    private DateTime _lastSubscriptionsCheck = DateTime.UtcNow;
+
     private string _dpiActiveText = "Обход DPI выключен";
     private string _dpiActiveColor = "#8C95A6";
 
@@ -489,20 +520,80 @@ public sealed class MainViewModel : ObservableObject
         private set => Set(ref _blockedListStatus, value);
     }
 
+    /// <summary>Когда список обновлён и когда обновится снова.</summary>
+    public string ListsUpdatedText
+    {
+        get => _listsUpdatedText;
+        private set => Set(ref _listsUpdatedText, value);
+    }
+
+    /// <summary>Автоматически обновлять готовые списки РКН.</summary>
+    public bool ListsAutoUpdate
+    {
+        get => _listsAutoUpdate;
+        set
+        {
+            if (!Set(ref _listsAutoUpdate, value)) return;
+            _settings.Update(s => s.AutoUpdateLists = value);
+        }
+    }
+
+    /// <summary>Идёт обновление готового списка.</summary>
+    public bool IsListsBusy
+    {
+        get => _isListsBusy;
+        private set
+        {
+            if (!Set(ref _isListsBusy, value)) return;
+            RefreshListsCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    /// <summary>Состояние подписок: сколько ссылок, когда обновлялись.</summary>
+    public string SubscriptionsStatusText
+    {
+        get => _subscriptionsStatusText;
+        private set => Set(ref _subscriptionsStatusText, value);
+    }
+
+    /// <summary>Автоматически обновлять ключи по сохранённым ссылкам-подпискам.</summary>
+    public bool AutoUpdateSubscriptions
+    {
+        get => _autoUpdateSubscriptions;
+        set
+        {
+            if (!Set(ref _autoUpdateSubscriptions, value)) return;
+            _settings.Update(s => s.AutoUpdateVpnSubscriptions = value);
+        }
+    }
+
+    /// <summary>Идёт обновление подписок.</summary>
+    public bool IsSubscriptionsBusy
+    {
+        get => _isSubscriptionsBusy;
+        private set
+        {
+            if (!Set(ref _isSubscriptionsBusy, value)) return;
+            RefreshSubscriptionsCommand.RaiseCanExecuteChanged();
+        }
+    }
+
     private async Task RefreshBlockedListAsync(bool force)
     {
         if (_blockedPreset == BlockedListPreset.Off)
         {
             _blockedListInfo = null;
             BlockedListStatus = "готовый список выключен";
+            ListsUpdatedText = "";
             return;
         }
         if (Interlocked.Exchange(ref _blockedListBusy, 1) == 1) return;
 
+        IsListsBusy = true;
         try
         {
             var preset = _blockedPreset;
-            BlockedListStatus = "загрузка готового списка…";
+            BlockedListStatus = force ? "принудительное обновление списка…" : "загрузка готового списка…";
             var info = await BlockedLists
                 .EnsureAsync(preset, force, message => _log.Info(message))
                 .ConfigureAwait(true);
@@ -515,15 +606,56 @@ public sealed class MainViewModel : ObservableObject
                 string updated = info.UpdatedAt is { } at ? $", обновлён {at:dd.MM.yyyy}" : "";
                 string stale = info.Error is null ? "" : $" (сеть недоступна: {info.Error})";
                 BlockedListStatus = $"{BlockedLists.DisplayName(preset)}: {info.Count:N0} доменов{updated}{stale}";
+                ListsUpdatedText = info.UpdatedAt is { } refreshed
+                    ? $"Копия от {refreshed:dd.MM.yyyy HH:mm}; автообновление раз в {BlockedLists.RefreshPeriod.TotalDays:0} дн."
+                    : "Дата обновления неизвестна.";
             }
             else
             {
                 BlockedListStatus = $"список недоступен: {info.Error}";
+                ListsUpdatedText = "";
             }
         }
         finally
         {
+            IsListsBusy = false;
             Interlocked.Exchange(ref _blockedListBusy, 0);
+        }
+    }
+
+    /// <summary>Кнопка «Обновить списки»: скачать копию заново, не дожидаясь недели.</summary>
+    private async Task RefreshListsAsync()
+    {
+        if (_blockedPreset == BlockedListPreset.Off)
+        {
+            StatusText = "Сначала выберите готовый список на странице «Обход DPI» или «Локации»";
+            return;
+        }
+        await RefreshBlockedListAsync(force: true).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Фоновое автообновление: списки РКН проверяются раз в 6 часов (скачивание —
+    /// по недельному сроку), подписки — раз в 12 часов.
+    /// </summary>
+    private void MaybeAutoUpdateBackgroundData()
+    {
+        var now = DateTime.UtcNow;
+
+        if (_listsAutoUpdate &&
+            now - _lastListsCheck >= TimeSpan.FromHours(6))
+        {
+            _lastListsCheck = now;
+            if (_blockedPreset != BlockedListPreset.Off && Volatile.Read(ref _blockedListBusy) == 0)
+                _ = RefreshBlockedListAsync(force: false);
+        }
+
+        if (_autoUpdateSubscriptions &&
+            now - _lastSubscriptionsCheck >= TimeSpan.FromHours(12))
+        {
+            _lastSubscriptionsCheck = now;
+            if (!IsSubscriptionsBusy)
+                _ = RefreshVpnSubscriptionsAsync(force: false);
         }
     }
 
@@ -970,6 +1102,8 @@ public sealed class MainViewModel : ObservableObject
         _dpiCheckUpdates = s.DpiCheckUpdates;
         _closeActionIndex = s.CloseToTray ? 0 : 1;
         _checkAppUpdates = s.CheckAppUpdatesOnStart;
+        _listsAutoUpdate = s.AutoUpdateLists;
+        _autoUpdateSubscriptions = s.AutoUpdateVpnSubscriptions;
     }
 
     public void BuildNodeList()
@@ -1161,6 +1295,7 @@ public sealed class MainViewModel : ObservableObject
         UpdateElapsed();
         RefreshDpiStatus();
         RefreshVpnStatus();
+        MaybeAutoUpdateBackgroundData();
 
         if (++_processRefreshTicks >= 5)
         {
@@ -1852,6 +1987,15 @@ public sealed class MainViewModel : ObservableObject
     /// <summary>Таблица локаций: строки, сгруппированные по стране (группы сворачиваются).</summary>
     public ICollectionView VpnKeysView { get; }
 
+    /// <summary>Плоский список локаций для выпадающего списка в шапке.</summary>
+    public ICollectionView VpnPickView { get; }
+
+    /// <summary>Плитки стран, добавленных в VPN (главная страница).</summary>
+    public ObservableCollection<VpnCountryTileViewModel> CountryTiles { get; } = new();
+
+    /// <summary>Сколько стран доступно в VPN.</summary>
+    public int VpnCountryCount => CountryTiles.Count;
+
     /// <summary>Сколько ключей сохранено (счётчик рядом с заголовком в панели ретрансляторов).</summary>
     public int VpnKeyCount => VpnKeyRows.Count;
 
@@ -1866,7 +2010,58 @@ public sealed class MainViewModel : ObservableObject
             VpnConnectCommand.RaiseCanExecuteChanged();
             ConnectCommand.RaiseCanExecuteChanged();
             VpnRemoveKeyCommand.RaiseCanExecuteChanged();
+            RememberSelectedKey(value);
+            UpdateCountryTileSelection();
         }
+    }
+
+    /// <summary>Запоминаем последнюю выбранную страну, чтобы она была выбрана при следующем запуске.</summary>
+    private void RememberSelectedKey(VpnKeyItemViewModel? row)
+    {
+        string? id = row?.Id;
+        string? country = row?.CountryGroup;
+        if (id == _settings.Current.VpnLastKeyId && country == _settings.Current.VpnLastCountry) return;
+        _settings.Update(s =>
+        {
+            s.VpnLastKeyId = id;
+            s.VpnLastCountry = country;
+        });
+    }
+
+    /// <summary>Подсветить плитку страны, к которой относится выбранная локация.</summary>
+    private void UpdateCountryTileSelection()
+    {
+        string? country = _selectedVpnKey?.CountryGroup;
+        foreach (var tile in CountryTiles)
+            tile.SetSelected(tile.Country == country);
+    }
+
+    /// <summary>Пересобрать плитки стран: одна плитка на страну, внутри — лучший ключ.</summary>
+    private void RebuildCountryTiles()
+    {
+        string? selectedCountry = _selectedVpnKey?.CountryGroup;
+        CountryTiles.Clear();
+
+        foreach (var group in VpnKeyRows
+                     .GroupBy(r => r.CountryGroup)
+                     .OrderBy(g => g.Key, StringComparer.CurrentCultureIgnoreCase))
+        {
+            var rows = group.ToList();
+            var best = rows.OrderBy(r => r.Ping > 0 ? r.Ping : double.MaxValue).First();
+            string flag = best.Flag.Length > 0 ? best.Flag : "🌐";
+            CountryTiles.Add(new VpnCountryTileViewModel(
+                group.Key, flag, rows, best, group.Key == selectedCountry));
+        }
+
+        OnPropertyChanged(nameof(VpnCountryCount));
+    }
+
+    /// <summary>Клик по плитке страны: выбрать лучшую локацию этой страны.</summary>
+    private void SelectCountry(object? parameter)
+    {
+        if (parameter is not VpnCountryTileViewModel tile) return;
+        SelectedVpnKey = tile.Key;
+        StatusText = $"Выбрана локация: {tile.Country}";
     }
 
     private readonly VpnKeyProber _vpnProber = new();
@@ -2200,7 +2395,7 @@ public sealed class MainViewModel : ObservableObject
     {
         if (parameter is null) return;
         if (!int.TryParse(parameter.ToString(), out int page)) return;
-        SelectedPageIndex = Math.Clamp(page, 0, 5);
+        SelectedPageIndex = Math.Clamp(page, 0, 4);
     }
 
     /// <summary>
@@ -2227,13 +2422,19 @@ public sealed class MainViewModel : ObservableObject
     /// <summary>Первичная загрузка ключей и правил маршрутизации из хранилища.</summary>
     private void VpnReloadFromStore()
     {
-        string? selectedId = _selectedVpnKey?.Id;
+        string? selectedId = _selectedVpnKey?.Id ?? _settings.Current.VpnLastKeyId;
+        string? lastCountry = _settings.Current.VpnLastCountry;
 
         VpnKeyRows.Clear();
         foreach (var key in App.VpnStore.Keys) VpnKeyRows.Add(new VpnKeyItemViewModel(key));
 
-        // Ключ не выбирается автоматически: локацию пользователь выбирает сам.
-        SelectedVpnKey = selectedId is null ? null : VpnKeyRows.FirstOrDefault(r => r.Id == selectedId);
+        // Последняя выбранная локация восстанавливается; если ключ из подписки исчез —
+        // берём первый ключ той же страны, чтобы страна осталась выбранной.
+        var restored = selectedId is null ? null : VpnKeyRows.FirstOrDefault(r => r.Id == selectedId);
+        if (restored is null && lastCountry is not null)
+            restored = VpnKeyRows.FirstOrDefault(r => r.CountryGroup == lastCountry);
+        SelectedVpnKey = restored;
+        RebuildCountryTiles();
 
         VpnDomainsText = App.VpnStore.Routing.Domains.Count > 0
             ? string.Join(", ", App.VpnStore.Routing.Domains)
@@ -2273,6 +2474,7 @@ public sealed class MainViewModel : ObservableObject
         {
             if (App.VpnStore.Keys.Any(k => k.RawLink == key.RawLink)) continue;
             key.SubscriptionName = subscriptionName;
+            key.SubscriptionUrl = dialog.SubscriptionUrl;
             App.VpnStore.Keys.Add(key);
         }
         App.VpnStore.Save();
@@ -2310,6 +2512,117 @@ public sealed class MainViewModel : ObservableObject
             }
             catch { }
         }
+
+        // Плитки стран показывают лучший пинг — обновляем после замера.
+        RebuildCountryTiles();
+    }
+
+    /// <summary>
+    /// Обновление ключей по сохранённым ссылкам-подпискам: новые ключи добавляются,
+    /// существующие обновляются (Id и дата добавления сохраняются), исчезнувшие удаляются.
+    /// </summary>
+    private async Task RefreshVpnSubscriptionsAsync(bool force)
+    {
+        if (Interlocked.Exchange(ref _subscriptionsBusy, 1) == 1) return;
+
+        IsSubscriptionsBusy = true;
+        _lastSubscriptionsCheck = DateTime.UtcNow;
+        try
+        {
+            var urls = App.VpnStore.Keys
+                .Select(k => k.SubscriptionUrl)
+                .Where(u => !string.IsNullOrWhiteSpace(u))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (urls.Count == 0)
+            {
+                SubscriptionsStatusText = "Подписок нет — ключи добавлены вручную.";
+                return;
+            }
+
+            SubscriptionsStatusText = force ? "Обновляю подписки…" : "Проверяю подписки…";
+            int added = 0, updated = 0, removed = 0, failed = 0;
+            string? lastError = null;
+
+            foreach (string url in urls)
+            {
+                var result = await VpnSubscriptionLoader.LoadAsync(url).ConfigureAwait(true);
+                if (!result.Ok)
+                {
+                    failed++;
+                    lastError = result.Error;
+                    _log.Warn($"Подписка {ShortUrl(url)}: {result.Error}");
+                    continue;
+                }
+
+                var existing = App.VpnStore.Keys
+                    .Where(k => string.Equals(k.SubscriptionUrl, url, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                string subscriptionName = existing.FirstOrDefault()?.SubscriptionName ?? "";
+
+                var freshLinks = new HashSet<string>(
+                    result.Keys.Where(k => k.RawLink.Length > 0).Select(k => k.RawLink),
+                    StringComparer.Ordinal);
+
+                removed += App.VpnStore.Keys.RemoveAll(k =>
+                    string.Equals(k.SubscriptionUrl, url, StringComparison.OrdinalIgnoreCase) &&
+                    k.RawLink.Length > 0 && !freshLinks.Contains(k.RawLink));
+
+                foreach (var key in result.Keys)
+                {
+                    key.SubscriptionUrl = url;
+                    if (subscriptionName.Length > 0) key.SubscriptionName = subscriptionName;
+
+                    int index = App.VpnStore.Keys.FindIndex(k =>
+                        string.Equals(k.SubscriptionUrl, url, StringComparison.OrdinalIgnoreCase) &&
+                        k.RawLink == key.RawLink);
+
+                    if (index >= 0)
+                    {
+                        key.Id = App.VpnStore.Keys[index].Id;
+                        key.AddedAt = App.VpnStore.Keys[index].AddedAt;
+                        App.VpnStore.Keys[index] = key;
+                        updated++;
+                    }
+                    else
+                    {
+                        App.VpnStore.Keys.Add(key);
+                        added++;
+                    }
+                }
+
+                _log.Info($"Подписка {ShortUrl(url)}: получено ключей {result.Keys.Count}");
+            }
+
+            if (added + updated + removed > 0)
+            {
+                App.VpnStore.Save();
+                VpnReloadFromStore();
+            }
+
+            var stamp = DateTime.Now.ToString("HH:mm");
+            SubscriptionsStatusText = failed == 0
+                ? $"Подписки ({urls.Count}) обновлены в {stamp}: +{added} новых, {updated} обновлено, {removed} удалено."
+                : $"Подписки: не удалось обновить {failed} из {urls.Count} ({lastError}). Удачных изменений: +{added}, обновлено {updated}.";
+        }
+        catch (Exception ex)
+        {
+            SubscriptionsStatusText = "Не удалось обновить подписки: " + ex.Message;
+            _log.Warn("Обновление подписок: " + ex);
+        }
+        finally
+        {
+            IsSubscriptionsBusy = false;
+            Interlocked.Exchange(ref _subscriptionsBusy, 0);
+        }
+    }
+
+    /// <summary>Короткое имя подписки для журнала (без токена в ссылке).</summary>
+    private static string ShortUrl(string url)
+    {
+        try { return new Uri(url).Host; }
+        catch { return "подписка"; }
     }
 
     private async Task VpnConnectAsync()
@@ -2318,6 +2631,22 @@ public sealed class MainViewModel : ObservableObject
         // повторный клик успевал запустить второе подключение поверх первого.
         if (_vpnBusy) return;
 
+        // Кнопка питания — переключатель: пока VPN работает, она отключает.
+        if (IsVpnRunning || App.Vpn.IsRunning || App.Vpn.IsCoreRunning)
+        {
+            await VpnDisconnectAsync().ConfigureAwait(true);
+            return;
+        }
+
+        // Локация не выбрана (например, после обновления подписки) — берём
+        // последнюю выбранную страну, чтобы кнопка работала без лишних шагов.
+        if (SelectedVpnKey is null && _settings.Current.VpnLastKeyId is { } lastId)
+        {
+            var remembered = VpnKeyRows.FirstOrDefault(r => r.Id == lastId)
+                ?? VpnKeyRows.FirstOrDefault(r => r.CountryGroup == _settings.Current.VpnLastCountry);
+            if (remembered is not null) SelectedVpnKey = remembered;
+        }
+
         var key = SelectedVpnKey?.Key;
         if (key is null)
         {
@@ -2325,7 +2654,7 @@ public sealed class MainViewModel : ObservableObject
             VpnStatusColor = "#F5A524";
             StateText = "Выберите локацию";
             StateColor = "#F5A524";
-            StatusText = "Сначала выберите локацию на странице «Локации»";
+            StatusText = "Сначала выберите страну на главной или в разделе «Локации»";
             SelectedPageIndex = 1;
             return;
         }
@@ -2348,6 +2677,7 @@ public sealed class MainViewModel : ObservableObject
                 StateColor = "#2FBF71";
                 StatusText = $"Подключено к {key.Name}";
                 InterfaceText = $"VPN · {key.Protocol}";
+                RememberSelectedKey(SelectedVpnKey);
             }
             else
             {

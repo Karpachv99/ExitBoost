@@ -144,6 +144,7 @@ public sealed class VpnKeyStore
         S("id", key.Id);
         S("name", key.Name);
         S("subscription", key.SubscriptionName);
+        S("sub_url", key.SubscriptionUrl);
         w.WriteString("protocol", key.Protocol.ToString().ToLowerInvariant());
         S("address", key.Address);
         w.WriteNumber("port", key.Port);
@@ -194,6 +195,7 @@ public sealed class VpnKeyStore
             Id = Get("id").Length == 0 ? Guid.NewGuid().ToString("N")[..8] : Get("id"),
             Name = Get("name").Length == 0 ? address : Get("name"),
             SubscriptionName = Get("subscription"),
+            SubscriptionUrl = Get("sub_url"),
             Protocol = proto,
             Address = address,
             Port = port,

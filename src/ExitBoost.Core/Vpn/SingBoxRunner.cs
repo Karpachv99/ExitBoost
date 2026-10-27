@@ -65,7 +65,25 @@ public sealed class SingBoxRunner
     }
 
     /// <summary>Ядро работает (в т.ч. независимо от этого процесса — «сироты»).</summary>
-    public bool IsCoreRunning => FindOurCoreProcesses().Length > 0;
+    public bool IsCoreRunning
+    {
+        get
+        {
+            // Статус опрашивается раз в секунду, поэтому найденные процессы
+            // обязательно освобождаем: иначе за сутки накапливаются тысячи handles.
+            Process[] processes = FindOurCoreProcesses();
+            try { return processes.Length > 0; }
+            finally { DisposeAll(processes); }
+        }
+    }
+
+    private static void DisposeAll(IEnumerable<Process> processes)
+    {
+        foreach (var process in processes)
+        {
+            try { process.Dispose(); } catch { }
+        }
+    }
 
     public bool IsInstalled
     {
@@ -317,6 +335,7 @@ public sealed class SingBoxRunner
 
     private Process CreateCoreProcess()
     {
+        TrimLogIfHuge();
         // ядро пишет журнал в LogPath само — не перехватываем его пайпы,
         // чтобы консоль (CLI/PowerShell) не ждала завершения ядра.
         // Ядро — самостоятельный процесс в отдельном скрытом консольном окне:
@@ -516,7 +535,7 @@ public sealed class SingBoxRunner
             ActiveKey = null;
         }
 
-        bool orphan = proc is null && FindOurCoreProcesses().Length > 0;
+        bool orphan = proc is null && IsCoreRunning;
         if (proc is null && !orphan) return;
 
         Log?.Invoke("остановка VPN по ключу…");
@@ -581,36 +600,51 @@ public sealed class SingBoxRunner
         ApplyPendingCoreUpdate();
     }
 
-    /// <summary>Наши процессы ядра (наша папка core или без пути — честно «свои»).</summary>
+    /// <summary>
+    /// Наши процессы ядра (наша папка core или без пути — честно «свои»).
+    /// Возвращённые процессы принадлежат вызывающему коду: их нужно освободить.
+    /// </summary>
     private Process[] FindOurCoreProcesses()
     {
-        try
+        Process[] all;
+        try { all = Process.GetProcessesByName("sing-box"); }
+        catch { return []; }
+
+        var ours = new List<Process>(all.Length);
+        foreach (var process in all)
         {
-            return Process.GetProcessesByName("sing-box")
-                .Where(p =>
-                {
-                    try
-                    {
-                        string path = "";
-                        try { path = p.MainModule?.FileName ?? ""; } catch { }
-                        return path.Length == 0
-                            || path.Equals(BinaryPath, StringComparison.OrdinalIgnoreCase)
-                            || path.StartsWith(CoreDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
-                    }
-                    catch
-                    {
-                        return false;
-                    }
-                })
-                .ToArray();
+            bool mine;
+            try
+            {
+                string path = "";
+                try { path = process.MainModule?.FileName ?? ""; } catch { }
+                mine = path.Length == 0
+                    || path.Equals(BinaryPath, StringComparison.OrdinalIgnoreCase)
+                    || path.StartsWith(CoreDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                mine = false;
+            }
+
+            if (mine) ours.Add(process);
+            else DisposeAll([process]);
         }
-        catch
-        {
-            return [];
-        }
+        return ours.ToArray();
     }
 
     // --------------------------------------------------------------- журнал
+
+    /// <summary>Не даём журналу ядра расти бесконечно: старше 8 МБ — начинаем заново.</summary>
+    private void TrimLogIfHuge()
+    {
+        try
+        {
+            if (File.Exists(LogPath) && new FileInfo(LogPath).Length > 8 * 1024 * 1024)
+                File.Delete(LogPath);
+        }
+        catch { }
+    }
 
     private string ReadLogTail()
     {

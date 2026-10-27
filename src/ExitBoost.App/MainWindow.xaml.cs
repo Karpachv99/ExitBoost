@@ -99,11 +99,11 @@ public partial class MainWindow : Window
             return;
         }
 
-        // Клик по заголовку страны — лучший по пингу ключ этой страны.
+        // Клик по заголовку страны или ключа-подписки — лучший по пингу ключ этой группы.
         string? group = FindGroupName(source);
         if (group is null) return;
         var best = _viewModel.VpnKeyRows
-            .Where(r => r.CountryGroup == group)
+            .Where(r => r.CountryGroup == group || r.Group == group)
             .OrderBy(r => r.Ping > 0 ? r.Ping : double.MaxValue)
             .FirstOrDefault();
         if (best is not null) ConnectRow(best);

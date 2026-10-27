@@ -15,6 +15,12 @@ public partial class VpnKeyDialogWindow : Window
     public IReadOnlyList<VpnKey> ResultKeys { get; private set; } = [];
     public string SubscriptionName { get; private set; } = "Добавленные ключи";
 
+    /// <summary>Ссылка-подписка, если ключи загружены по ней (для автообновления).</summary>
+    public string SubscriptionUrl { get; private set; } = "";
+
+    /// <summary>Ссылки, реально полученные из подписки: ручные правки отвязывают набор от неё.</summary>
+    private readonly HashSet<string> _downloadedLinks = new(StringComparer.Ordinal);
+
     public VpnKeyDialogWindow()
     {
         InitializeComponent();
@@ -55,9 +61,12 @@ public partial class VpnKeyDialogWindow : Window
         try
         {
             SubscriptionName = GetSubscriptionName(url);
+            SubscriptionUrl = url;
             string text = await VpnSubscription.DownloadAsync(url).ConfigureAwait(true);
             KeysBox.Text = text;
             var keys = VpnSubscription.ParseAll(text, out var errors);
+            _downloadedLinks.Clear();
+            foreach (var key in keys) _downloadedLinks.Add(key.RawLink);
             int unsupported = errors.Count(e => e.Contains("поддерживается только Xray", StringComparison.OrdinalIgnoreCase));
             int invalid = errors.Count - unsupported;
             PreviewText.Text = keys.Count > 0
@@ -148,6 +157,15 @@ public partial class VpnKeyDialogWindow : Window
         }
 
         ResultKeys = keys;
+
+        // Если пользователь правил список руками, набор больше не считается подпиской:
+        // автообновление не должно затирать ручные ключи.
+        if (_downloadedLinks.Count == 0 || !keys.All(k => _downloadedLinks.Contains(k.RawLink)))
+        {
+            SubscriptionUrl = "";
+            SubscriptionName = "Добавленные ключи";
+        }
+
         DialogResult = true;
     }
 }

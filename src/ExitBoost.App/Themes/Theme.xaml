@@ -602,6 +602,46 @@
         </Setter>
     </Style>
 
+    <!-- Крупный выбор локации в шапке -->
+    <Style x:Key="LocationCombo" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+        <Setter Property="MinHeight" Value="48" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Padding" Value="10,7" />
+    </Style>
+
+    <!-- Плитка страны на главной странице -->
+    <Style x:Key="CountryTile" TargetType="Button">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Margin" Value="0,0,10,10" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="bd" Width="134" Height="96" CornerRadius="12"
+                            Background="#0D1522" BorderBrush="#1B2A40" BorderThickness="1"
+                            Padding="11,9" SnapsToDevicePixels="True">
+                        <ContentPresenter />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="#14202F" />
+                            <Setter TargetName="bd" Property="BorderBrush" Value="#2B4A78" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="bd" Property="Opacity" Value="0.8" />
+                        </Trigger>
+                        <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                            <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                            <Setter TargetName="bd" Property="Background" Value="#13203A" />
+                        </DataTrigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- Тёмная полоса прокрутки вместо системной светлой -->
     <Style TargetType="ScrollBar">
         <Setter Property="Background" Value="Transparent" />
