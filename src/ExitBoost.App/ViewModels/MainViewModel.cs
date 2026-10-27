@@ -3042,11 +3042,11 @@ public sealed class MainViewModel : ObservableObject
 
     public string CurrentVersionText => "Версия " + CurrentVersion;
 
-    /// <summary>Репозиторий обновлений зашит в программу: GitLab и его зеркало GitHub.</summary>
+    /// <summary>Репозиторий обновлений зашит в программу: GitHub и резервный GitLab.</summary>
     public string UpdateRepo => AppSettings.OfficialUpdateRepo;
 
     /// <summary>Источник обновлений для отображения.</summary>
-    public string UpdateSourceText => "gitlab.com/" + UpdateRepo + " · зеркало github.com/" + UpdateRepo;
+    public string UpdateSourceText => "github.com/" + UpdateRepo + " · резервный gitlab.com/" + UpdateRepo;
 
     private bool _checkAppUpdates = true;
     public bool CheckAppUpdatesOnStart

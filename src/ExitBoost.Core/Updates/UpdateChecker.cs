@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 namespace ExitBoost.Core.Updates;
 
 /// <summary>
-/// Проверка обновлений: основной источник — GitLab Releases, резервный — GitHub.
+/// Проверка обновлений: основной источник — GitHub Releases, резервный — GitLab.
 /// Сначала читается строгий манифест update.json; если его нет — используется
 /// старый формат с ZIP-ассетом и размером из release notes.
 /// </summary>
@@ -64,8 +64,8 @@ public static class UpdateChecker
     }
 
     /// <summary>
-    /// Проверить наличие новой версии. Сначала GitLab; если он недоступен
-    /// (сеть, блокировка, ошибка API), проверяется зеркало GitHub.
+    /// Проверить наличие новой версии. Сначала GitHub; если он недоступен
+    /// (сеть, блокировка, ошибка API), проверяется резервный GitLab.
     /// Ошибка обоих источников возвращается как <see cref="UpdateCheckStatus.Failed"/>,
     /// а не маскируется под «обновлений нет».
     /// </summary>
@@ -79,18 +79,18 @@ public static class UpdateChecker
         if (string.IsNullOrWhiteSpace(owner) || string.IsNullOrWhiteSpace(repo))
             return UpdateCheckResult.Failed("не задан репозиторий обновлений");
 
-        UpdateCheckResult gitlab = await CheckGitLabAsync(owner, repo, currentVersion, channel, ct)
-            .ConfigureAwait(false);
-        if (gitlab.Status != UpdateCheckStatus.Failed)
-            return gitlab;
-
         UpdateCheckResult github = await CheckGitHubAsync(owner, repo, currentVersion, channel, ct)
             .ConfigureAwait(false);
         if (github.Status != UpdateCheckStatus.Failed)
             return github;
 
+        UpdateCheckResult gitlab = await CheckGitLabAsync(owner, repo, currentVersion, channel, ct)
+            .ConfigureAwait(false);
+        if (gitlab.Status != UpdateCheckStatus.Failed)
+            return gitlab;
+
         return UpdateCheckResult.Failed(
-            $"GitLab: {gitlab.Error}; зеркало GitHub: {github.Error}");
+            $"GitHub: {github.Error}; резервный GitLab: {gitlab.Error}");
     }
 
     private static async Task<UpdateCheckResult> CheckGitLabAsync(
@@ -167,7 +167,7 @@ public static class UpdateChecker
     }
 
     /// <summary>
-    /// Проверка зеркала GitHub без обращения к GitLab. Сначала пробуем прямой
+    /// Проверка основного источника GitHub без обращения к GitLab. Сначала пробуем прямой
     /// адрес последнего манифеста (без API-лимитов), затем GitHub API — он нужен
     /// для старых релизов без update.json.
     /// </summary>
@@ -222,7 +222,7 @@ public static class UpdateChecker
         }
         catch (TaskCanceledException)
         {
-            return UpdateCheckResult.Failed("таймаут проверки зеркала GitHub");
+            return UpdateCheckResult.Failed("таймаут проверки основного источника GitHub");
         }
         catch (HttpRequestException ex)
         {
@@ -230,7 +230,7 @@ public static class UpdateChecker
         }
         catch (Exception ex)
         {
-            return UpdateCheckResult.Failed("не удалось проверить зеркало GitHub: " + ex.Message);
+            return UpdateCheckResult.Failed("не удалось проверить основной источник GitHub: " + ex.Message);
         }
     }
 

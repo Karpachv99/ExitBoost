@@ -35,7 +35,7 @@ $projectId = 88008209
 $projectPath = 'karpachv99/ExitBoost'
 $packageName = 'exitboost'
 
-# GitHub — зеркало обновлений на случай, если GitLab недоступен.
+# GitHub — основной источник обновлений; GitLab публикуется как резервный.
 $githubOwner = 'Karpachv99'
 $githubRepo = 'ExitBoost'
 
