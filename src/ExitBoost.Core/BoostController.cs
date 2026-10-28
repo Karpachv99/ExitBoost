@@ -244,8 +244,7 @@ public sealed class BoostController : IAsyncDisposable
                     if (!string.IsNullOrWhiteSpace(cidr)) list.Add(cidr.Trim());
                 if (list.Count == 0)
                 {
-                    list.Add("0.0.0.0/0");
-                    warning = "Не заданы подсети — включён режим полного туннеля.";
+                    warning = "Не заданы подсети для NetworkSplit. Маршруты через VPN не добавлены.";
                 }
                 break;
 
@@ -256,8 +255,8 @@ public sealed class BoostController : IAsyncDisposable
                 list.AddRange(manual);
                 if (list.Count == 0)
                 {
-                    list.Add("0.0.0.0/0");
-                    warning = "Игра не найдена или ещё не подключилась — включён режим полного туннеля.";
+                    // Fail closed: missing process endpoints must not enable a full-device tunnel.
+                    warning = "Игровые адреса пока не обнаружены. Полный туннель не включён; запустите игру и дождитесь подключения к серверу.";
                 }
                 break;
         }

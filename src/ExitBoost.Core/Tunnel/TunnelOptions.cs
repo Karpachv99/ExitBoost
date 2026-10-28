@@ -40,7 +40,10 @@ public sealed class TunnelOptions
     };
 
     /// <summary>Текстовый вид AllowedIPs для конфига WireGuard.</summary>
-    public string AllowedIpsString => AllowedIps.Count == 0 ? "0.0.0.0/0" : string.Join(", ", AllowedIps);
+    // Empty split-routing lists mean no destinations are routed; only FullTunnel gets the default route.
+    public string AllowedIpsString => AllowedIps.Count == 0
+        ? (Mode == RoutingMode.FullTunnel ? "0.0.0.0/0" : "")
+        : string.Join(", ", AllowedIps);
 
     public override string ToString() => $"{Mode}: {AllowedIpsString}";
 }
@@ -95,7 +98,8 @@ public static class WireGuardConfigBuilder
         sb.AppendLine($"PublicKey = {node.PublicKey}");
         if (!string.IsNullOrWhiteSpace(node.PresharedKey))
             sb.AppendLine($"PresharedKey = {node.PresharedKey}");
-        sb.AppendLine($"AllowedIPs = {options.AllowedIpsString}");
+        if (!string.IsNullOrWhiteSpace(options.AllowedIpsString))
+            sb.AppendLine($"AllowedIPs = {options.AllowedIpsString}");
         sb.AppendLine($"Endpoint = {node.Host}:{node.Port}");
         if (node.PersistentKeepalive > 0)
             sb.AppendLine($"PersistentKeepalive = {node.PersistentKeepalive}");
@@ -116,7 +120,8 @@ public static class WireGuardConfigBuilder
         sb.AppendLine($"PublicKey = {node.PublicKey}");
         if (!string.IsNullOrWhiteSpace(node.PresharedKey))
             sb.AppendLine($"PresharedKey = {node.PresharedKey}");
-        sb.AppendLine($"AllowedIPs = {options.AllowedIpsString}");
+        if (!string.IsNullOrWhiteSpace(options.AllowedIpsString))
+            sb.AppendLine($"AllowedIPs = {options.AllowedIpsString}");
         sb.AppendLine($"Endpoint = {node.Host}:{node.Port}");
         if (node.PersistentKeepalive > 0)
             sb.AppendLine($"PersistentKeepalive = {node.PersistentKeepalive}");

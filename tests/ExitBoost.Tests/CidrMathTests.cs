@@ -51,4 +51,19 @@ public class CidrMathTests
         Assert.True(CidrMath.TryParse("192.0.2.5", out var start, out var end));
         Assert.Equal(start, end);
     }
+
+    [Theory]
+    [InlineData("192.0.2.1/not-a-prefix")]
+    [InlineData("192.0.2.1/")]
+    [InlineData("192.0.2.1/33")]
+    [InlineData("192.0.2.1/-1")]
+    [InlineData("192.0.2.1/24/extra")]
+    [InlineData("")]
+    public void Некорректный_CIDR_возвращает_false_без_исключения(string cidr)
+    {
+        var exception = Record.Exception(() => CidrMath.TryParse(cidr, out _, out _));
+
+        Assert.Null(exception);
+        Assert.False(CidrMath.TryParse(cidr, out _, out _));
+    }
 }

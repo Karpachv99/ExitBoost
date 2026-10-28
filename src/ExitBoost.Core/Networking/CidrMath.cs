@@ -65,11 +65,13 @@ public static class CidrMath
         if (string.IsNullOrWhiteSpace(cidr)) return false;
 
         string[] parts = cidr.Split('/');
+        if (parts.Length > 2) return false;
         if (!IPAddress.TryParse(parts[0].Trim(), out var ip)) return false;
         if (ip.AddressFamily != AddressFamily.InterNetwork) return false;
 
         uint value = ToUInt(ip);
-        int prefix = parts.Length > 1 ? int.Parse(parts[1]) : 32;
+        int prefix = 32;
+        if (parts.Length == 2 && !int.TryParse(parts[1].Trim(), out prefix)) return false;
         if (prefix < 0 || prefix > 32) return false;
 
         ulong mask = prefix == 0 ? 0UL : (0xFFFFFFFFUL << (32 - prefix)) & 0xFFFFFFFFUL;
