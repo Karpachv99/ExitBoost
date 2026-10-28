@@ -1,4 +1,5 @@
 using ExitBoost.Core.Configuration;
+using ExitBoost.Core.Dpi;
 using ExitBoost.Core.Logging;
 using ExitBoost.Core.Models;
 using ExitBoost.Core.Networking;
@@ -26,7 +27,9 @@ public sealed class BoostController : IAsyncDisposable
     private readonly WindowsRouteManager _routes;
     private readonly TunnelManager _tunnel;
     private readonly NetworkStateStore _stateStore;
+    private readonly WinDivertFlowMonitor _udpMonitor;
 
+    private readonly GameEndpointTracker _endpointTracker = new();
     private Timer? _watchTimer;
     private readonly HashSet<string> _knownEndpoints = new(StringComparer.OrdinalIgnoreCase);
 
@@ -46,6 +49,8 @@ public sealed class BoostController : IAsyncDisposable
         _routes = routes;
         _tunnel = tunnel;
         _stateStore = stateStore ?? new NetworkStateStore();
+        _udpMonitor = new WinDivertFlowMonitor(new ZapretBundle().EngineDirectory);
+        _udpMonitor.Log = message => _log.Write(LogLevel.Info, message);
         _tunnel.StateChanged += _ => StatusChanged?.Invoke();
         _tunnel.Log += m => _log.Write(LogLevel.Info, m);
     }
@@ -151,6 +156,7 @@ public sealed class BoostController : IAsyncDisposable
     public async Task CleanupAllAsync(CancellationToken ct = default)
     {
         StopWatcher();
+        await _udpMonitor.StopAsync().ConfigureAwait(false);
 
         await _routes.RemoveGroupAsync(ct).ConfigureAwait(false);
 
@@ -221,7 +227,12 @@ public sealed class BoostController : IAsyncDisposable
         foreach (var pid in ResolveTargetPids())
         {
             foreach (var ip in ProcessInspector.GetRemoteAddresses(pid))
-                result.Add(ip);
+                if (GameEndpointTracker.TryNormalizeIpv4(ip, out var normalized)) result.Add(normalized);
+
+            // Windows' UDP table contains local ports only. WinDivert FLOW events
+            // provide the missing remote address and owning PID for UDP game traffic.
+            foreach (var flow in _udpMonitor.GetUdpFlows(pid))
+                if (GameEndpointTracker.TryNormalizeIpv4(flow.RemoteAddress, out var normalizedUdp)) result.Add(normalizedUdp);
         }
         return result;
     }
@@ -285,6 +296,20 @@ public sealed class BoostController : IAsyncDisposable
         _node = node;
         _mode = mode;
 
+        _endpointTracker.Clear();
+        _knownEndpoints.Clear();
+        if (mode == RoutingMode.ProcessSplit && _settings.Current.AutoDetectEndpoints)
+        {
+            // Start before the first endpoint snapshot so short-lived UDP flows are not missed.
+            bool listening = await _udpMonitor.StartAsync(ct).ConfigureAwait(false);
+            if (!listening)
+                _log.Warn("Автоопределение UDP-серверов недоступно; продолжаю с обнаружением TCP. Установите/обновите zapret и запустите приложение от администратора.");
+        }
+        else
+        {
+            await _udpMonitor.StopAsync().ConfigureAwait(false);
+        }
+
         var (allowedIps, warning) = BuildAllowedIps(mode);
         if (warning is not null)
         {
@@ -307,6 +332,8 @@ public sealed class BoostController : IAsyncDisposable
         var result = await _tunnel.ConnectAsync(node, options, ct).ConfigureAwait(false);
         if (!result.Success)
         {
+            StopWatcher();
+            await _udpMonitor.StopAsync().ConfigureAwait(false);
             _log.Error($"Не удалось подключиться: {result.Message}");
             StatusChanged?.Invoke();
             return false;
@@ -315,9 +342,8 @@ public sealed class BoostController : IAsyncDisposable
         // Запоминаем туннель, чтобы его можно было снять после аварийного завершения.
         _stateStore.RememberTunnel(WireGuardBackend.TunnelNameFor(node.Id));
 
-        _knownEndpoints.Clear();
-        foreach (var ip in allowedIps.Where(a => a.EndsWith("/32")))
-            _knownEndpoints.Add(ip[..^3]);
+        foreach (var ip in _endpointTracker.Observe(DetectTargetEndpoints(), DateTime.UtcNow))
+            _knownEndpoints.Add(ip);
 
         StartWatcher();
 
@@ -331,12 +357,14 @@ public sealed class BoostController : IAsyncDisposable
     public async Task DisconnectAsync(CancellationToken ct = default)
     {
         StopWatcher();
+        await _udpMonitor.StopAsync().ConfigureAwait(false);
 
         _stateStore.Clear();
 
         await _tunnel.DisconnectAsync().ConfigureAwait(false);
         _node = null;
         _knownEndpoints.Clear();
+        _endpointTracker.Clear();
         _log.Info("Соединение закрыто");
         StatusChanged?.Invoke();
     }
@@ -366,22 +394,20 @@ public sealed class BoostController : IAsyncDisposable
             if (_mode != RoutingMode.ProcessSplit || !_settings.Current.AutoDetectEndpoints) return;
             if (_node is null || _options is null) return;
 
-            var endpoints = DetectTargetEndpoints();
-            bool changed = false;
-            foreach (var ep in endpoints)
-            {
-                if (!_knownEndpoints.Contains(ep)) { _knownEndpoints.Add(ep); changed = true; }
-            }
-
+            var current = _endpointTracker.Observe(DetectTargetEndpoints(), DateTime.UtcNow)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            bool changed = !_knownEndpoints.SetEquals(current);
             if (!changed) return;
 
+            _knownEndpoints.Clear();
+            foreach (var ep in current) _knownEndpoints.Add(ep);
+
             var manual = _settings.Current.SplitSubnets.Where(c => !string.IsNullOrWhiteSpace(c)).Select(c => c.Trim()).ToList();
-            var newIps = _knownEndpoints.Select(e => e + "/32").ToList();
-            newIps.AddRange(manual);
-            if (newIps.Count == 0) return;
+            var newIps = _knownEndpoints.Select(e => e + "/32").Concat(manual)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
             _options.AllowedIps = newIps;
-            _log.Info($"Обнаружены игровые серверы: {string.Join(", ", endpoints)}");
+            _log.Info($"Обновлён список игровых маршрутов: {string.Join(", ", newIps)}");
 
             if (_tunnel is not null && _node is not null)
             {
