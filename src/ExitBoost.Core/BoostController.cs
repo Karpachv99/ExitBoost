@@ -26,6 +26,7 @@ public sealed class BoostController : IAsyncDisposable
     private readonly WindowsRouteManager _routes;
     private readonly TunnelManager _tunnel;
     private readonly NetworkStateStore _stateStore;
+    private readonly Func<int, IEnumerable<string>>? _udpEndpointProvider;
 
     private Timer? _watchTimer;
     private readonly HashSet<string> _knownEndpoints = new(StringComparer.OrdinalIgnoreCase);
@@ -39,13 +40,15 @@ public sealed class BoostController : IAsyncDisposable
         LogBus log,
         WindowsRouteManager routes,
         TunnelManager tunnel,
-        NetworkStateStore? stateStore = null)
+        NetworkStateStore? stateStore = null,
+        Func<int, IEnumerable<string>>? udpEndpointProvider = null)
     {
         _settings = settings;
         _log = log;
         _routes = routes;
         _tunnel = tunnel;
         _stateStore = stateStore ?? new NetworkStateStore();
+        _udpEndpointProvider = udpEndpointProvider;
         _tunnel.StateChanged += _ => StatusChanged?.Invoke();
         _tunnel.Log += m => _log.Write(LogLevel.Info, m);
     }
@@ -220,8 +223,30 @@ public sealed class BoostController : IAsyncDisposable
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var pid in ResolveTargetPids())
         {
+            // TCP endpoints come from the Windows IP Helper connection table.
             foreach (var ip in ProcessInspector.GetRemoteAddresses(pid))
-                result.Add(ip);
+            {
+                if (System.Net.IPAddress.TryParse(ip, out var address)
+                    && address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                    result.Add(address.ToString());
+            }
+
+            // UDP APIs expose local sockets, not remote peers. Use WinDivert FLOW
+            // events to map remote UDP endpoints to the owning game process.
+            if (_udpEndpointProvider is null) continue;
+            try
+            {
+                foreach (var ip in _udpEndpointProvider(pid))
+                {
+                    if (System.Net.IPAddress.TryParse(ip, out var address)
+                        && address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                        result.Add(address.ToString());
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.Warn($"Не удалось прочитать UDP endpoints процесса {pid}: {ex.Message}");
+            }
         }
         return result;
     }
