@@ -1,4 +1,7 @@
 using ExitBoost.Core.Configuration;
+using ExitBoost.Core.Dpi;
+using System.Net;
+using System.Net.Sockets;
 using ExitBoost.Core.Logging;
 using ExitBoost.Core.Models;
 using ExitBoost.Core.Networking;
@@ -26,7 +29,10 @@ public sealed class BoostController : IAsyncDisposable
     private readonly WindowsRouteManager _routes;
     private readonly TunnelManager _tunnel;
     private readonly NetworkStateStore _stateStore;
+    private readonly WinDivertFlowMonitor _udpMonitor;
 
+    private static readonly TimeSpan EndpointRetention = TimeSpan.FromMinutes(10);
+    private readonly Dictionary<string, DateTime> _endpointLastSeen = new(StringComparer.OrdinalIgnoreCase);
     private Timer? _watchTimer;
     private readonly HashSet<string> _knownEndpoints = new(StringComparer.OrdinalIgnoreCase);
 
@@ -46,6 +52,8 @@ public sealed class BoostController : IAsyncDisposable
         _routes = routes;
         _tunnel = tunnel;
         _stateStore = stateStore ?? new NetworkStateStore();
+        _udpMonitor = new WinDivertFlowMonitor(new ZapretBundle().EngineDirectory);
+        _udpMonitor.Log = message => _log.Write(LogLevel.Info, message);
         _tunnel.StateChanged += _ => StatusChanged?.Invoke();
         _tunnel.Log += m => _log.Write(LogLevel.Info, m);
     }
@@ -151,6 +159,7 @@ public sealed class BoostController : IAsyncDisposable
     public async Task CleanupAllAsync(CancellationToken ct = default)
     {
         StopWatcher();
+        await _udpMonitor.StopAsync().ConfigureAwait(false);
 
         await _routes.RemoveGroupAsync(ct).ConfigureAwait(false);
 
@@ -221,9 +230,23 @@ public sealed class BoostController : IAsyncDisposable
         foreach (var pid in ResolveTargetPids())
         {
             foreach (var ip in ProcessInspector.GetRemoteAddresses(pid))
-                result.Add(ip);
+                AddIpv4Endpoint(result, ip);
+
+            // Windows' UDP table contains local ports only. WinDivert FLOW events
+            // provide the missing remote address and owning PID for UDP game traffic.
+            foreach (var flow in _udpMonitor.GetUdpFlows(pid))
+                AddIpv4Endpoint(result, flow.RemoteAddress);
         }
         return result;
+    }
+
+    private static void AddIpv4Endpoint(HashSet<string> endpoints, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !IPAddress.TryParse(value, out var address)) return;
+        if (address.AddressFamily != AddressFamily.InterNetwork || address.Equals(IPAddress.Any) ||
+            address.Equals(IPAddress.Broadcast) || IPAddress.IsLoopback(address) || address.GetAddressBytes()[0] >= 224)
+            return;
+        endpoints.Add(address.ToString());
     }
 
     /// <summary>Расчёт списка маршрутов для выбранного режима.</summary>
@@ -285,6 +308,16 @@ public sealed class BoostController : IAsyncDisposable
         _node = node;
         _mode = mode;
 
+        _endpointLastSeen.Clear();
+        _knownEndpoints.Clear();
+        if (mode == RoutingMode.ProcessSplit && _settings.Current.AutoDetectEndpoints)
+        {
+            // Start before the first endpoint snapshot so short-lived UDP flows are not missed.
+            bool listening = await _udpMonitor.StartAsync(ct).ConfigureAwait(false);
+            if (!listening)
+                _log.Warn("Автоопределение UDP-серверов недоступно; продолжаю с обнаружением TCP. Установите/обновите zapret и запустите приложение от администратора.");
+        }
+
         var (allowedIps, warning) = BuildAllowedIps(mode);
         if (warning is not null)
         {
@@ -315,9 +348,11 @@ public sealed class BoostController : IAsyncDisposable
         // Запоминаем туннель, чтобы его можно было снять после аварийного завершения.
         _stateStore.RememberTunnel(WireGuardBackend.TunnelNameFor(node.Id));
 
-        _knownEndpoints.Clear();
-        foreach (var ip in allowedIps.Where(a => a.EndsWith("/32")))
-            _knownEndpoints.Add(ip[..^3]);
+        foreach (var ip in DetectTargetEndpoints())
+        {
+            _knownEndpoints.Add(ip);
+            _endpointLastSeen[ip] = DateTime.UtcNow;
+        }
 
         StartWatcher();
 
@@ -331,12 +366,14 @@ public sealed class BoostController : IAsyncDisposable
     public async Task DisconnectAsync(CancellationToken ct = default)
     {
         StopWatcher();
+        await _udpMonitor.StopAsync().ConfigureAwait(false);
 
         _stateStore.Clear();
 
         await _tunnel.DisconnectAsync().ConfigureAwait(false);
         _node = null;
         _knownEndpoints.Clear();
+        _endpointLastSeen.Clear();
         _log.Info("Соединение закрыто");
         StatusChanged?.Invoke();
     }
@@ -366,22 +403,29 @@ public sealed class BoostController : IAsyncDisposable
             if (_mode != RoutingMode.ProcessSplit || !_settings.Current.AutoDetectEndpoints) return;
             if (_node is null || _options is null) return;
 
+            var now = DateTime.UtcNow;
             var endpoints = DetectTargetEndpoints();
-            bool changed = false;
-            foreach (var ep in endpoints)
-            {
-                if (!_knownEndpoints.Contains(ep)) { _knownEndpoints.Add(ep); changed = true; }
-            }
+            foreach (var ep in endpoints) _endpointLastSeen[ep] = now;
 
+            // Keep short-lived TCP/UDP server addresses briefly, then remove them.
+            foreach (var stale in _endpointLastSeen
+                .Where(pair => now - pair.Value > EndpointRetention)
+                .Select(pair => pair.Key).ToList())
+                _endpointLastSeen.Remove(stale);
+
+            var current = _endpointLastSeen.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            bool changed = !_knownEndpoints.SetEquals(current);
             if (!changed) return;
 
+            _knownEndpoints.Clear();
+            foreach (var ep in current) _knownEndpoints.Add(ep);
+
             var manual = _settings.Current.SplitSubnets.Where(c => !string.IsNullOrWhiteSpace(c)).Select(c => c.Trim()).ToList();
-            var newIps = _knownEndpoints.Select(e => e + "/32").ToList();
-            newIps.AddRange(manual);
-            if (newIps.Count == 0) return;
+            var newIps = _knownEndpoints.Select(e => e + "/32").Concat(manual)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
             _options.AllowedIps = newIps;
-            _log.Info($"Обнаружены игровые серверы: {string.Join(", ", endpoints)}");
+            _log.Info($"Обновлён список игровых маршрутов: {string.Join(", ", newIps)}");
 
             if (_tunnel is not null && _node is not null)
             {
