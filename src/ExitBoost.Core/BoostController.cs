@@ -317,6 +317,10 @@ public sealed class BoostController : IAsyncDisposable
             if (!listening)
                 _log.Warn("Автоопределение UDP-серверов недоступно; продолжаю с обнаружением TCP. Установите/обновите zapret и запустите приложение от администратора.");
         }
+        else
+        {
+            await _udpMonitor.StopAsync().ConfigureAwait(false);
+        }
 
         var (allowedIps, warning) = BuildAllowedIps(mode);
         if (warning is not null)
@@ -340,6 +344,8 @@ public sealed class BoostController : IAsyncDisposable
         var result = await _tunnel.ConnectAsync(node, options, ct).ConfigureAwait(false);
         if (!result.Success)
         {
+            StopWatcher();
+            await _udpMonitor.StopAsync().ConfigureAwait(false);
             _log.Error($"Не удалось подключиться: {result.Message}");
             StatusChanged?.Invoke();
             return false;
