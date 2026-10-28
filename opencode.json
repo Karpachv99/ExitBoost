@@ -1,0 +1,25 @@
+
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "lmstudio": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "LM Studio",
+      "options": {
+        "baseURL": "http://127.0.0.1:1234/v1"
+      },
+      "models": {
+        "deepseek-coder-v2-lite-instruct": {
+          "name": "DeepSeek Coder V2 Lite"
+        },
+        "deepseek-coder-6.7b-instruct": {
+          "name": "DeepSeek Coder 6.7B"
+        },
+        "google/gemma-4-e4b": {
+          "name": "Gemma 4 E4B"
+        }
+      }
+    }
+  },
+  "model": "lmstudio/deepseek-coder-v2-lite-instruct"
+}

@@ -1,0 +1,116 @@
+diff --git a/src/ExitBoost.Core/Networking/CidrMath.cs b/src/ExitBoost.Core/Networking/CidrMath.cs
+--- a/src/ExitBoost.Core/Networking/CidrMath.cs
++++ b/src/ExitBoost.Core/Networking/CidrMath.cs
+@@ -48,10 +48,14 @@
+         if (string.IsNullOrWhiteSpace(cidr)) return false;
+
+         string[] parts = cidr.Split('/');
++        // Reject malformed CIDR strings instead of throwing from int.Parse.
++        // A second slash is never valid IPv4 CIDR notation.
++        if (parts.Length > 2) return false;
+         if (!IPAddress.TryParse(parts[0].Trim(), out var ip)) return false;
+         if (ip.AddressFamily != AddressFamily.InterNetwork) return false;
+
+         uint value = ToUInt(ip);
+-        int prefix = parts.Length > 1 ? int.Parse(parts[1]) : 32;
++        int prefix = 32;
++        if (parts.Length == 2 && !int.TryParse(parts[1].Trim(), out prefix)) return false;
+         if (prefix < 0 || prefix > 32) return false;
+
+diff --git a/src/ExitBoost.Core/Tunnel/TunnelOptions.cs b/src/ExitBoost.Core/Tunnel/TunnelOptions.cs
+--- a/src/ExitBoost.Core/Tunnel/TunnelOptions.cs
++++ b/src/ExitBoost.Core/Tunnel/TunnelOptions.cs
+@@ -78,9 +78,8 @@
+         sb.AppendLine($"PublicKey = {node.PublicKey}");
+         if (!string.IsNullOrWhiteSpace(node.PresharedKey))
+             sb.AppendLine($"PresharedKey = {node.PresharedKey}");
+-        if (!string.IsNullOrWhiteSpace(options.AllowedIpsString))
+-            if (!string.IsNullOrWhiteSpace(options.AllowedIpsString))
++        if (!string.IsNullOrWhiteSpace(options.AllowedIpsString))
+             sb.AppendLine($"AllowedIPs = {options.AllowedIpsString}");
+         sb.AppendLine($"Endpoint = {node.Host}:{node.Port}");
+         if (node.PersistentKeepalive > 0)
+@@ -99,7 +98,11 @@
+         sb.AppendLine($"PublicKey = {node.PublicKey}");
+         if (!string.IsNullOrWhiteSpace(node.PresharedKey))
+             sb.AppendLine($"PresharedKey = {node.PresharedKey}");
+-        sb.AppendLine($"AllowedIPs = {options.AllowedIpsString}");
++        // An empty ProcessSplit list means no destinations are routed yet.
++        // Omitting the key avoids generating "AllowedIPs = " while preserving
++        // the explicit 0.0.0.0/0 value for FullTunnel.
++        if (!string.IsNullOrWhiteSpace(options.AllowedIpsString))
++            sb.AppendLine($"AllowedIPs = {options.AllowedIpsString}");
+         sb.AppendLine($"Endpoint = {node.Host}:{node.Port}");
+         if (node.PersistentKeepalive > 0)
+             sb.AppendLine($"PersistentKeepalive = {node.PersistentKeepalive}");
+diff --git a/tests/ExitBoost.Tests/CidrMathTests.cs b/tests/ExitBoost.Tests/CidrMathTests.cs
+--- a/tests/ExitBoost.Tests/CidrMathTests.cs
++++ b/tests/ExitBoost.Tests/CidrMathTests.cs
+@@ -43,6 +43,21 @@
+     public void Разбор_одиночного_адреса()
+     {
+         Assert.True(CidrMath.TryParse("192.0.2.5", out var start, out var end));
+         Assert.Equal(start, end);
+     }
++
++    [Theory]
++    [InlineData("192.0.2.1/not-a-prefix")]
++    [InlineData("192.0.2.1/")]
++    [InlineData("192.0.2.1/33")]
++    [InlineData("192.0.2.1/-1")]
++    [InlineData("192.0.2.1/24/extra")]
++    [InlineData("")]
++    public void Некорректный_CIDR_возвращает_false_без_исключения(string cidr)
++    {
++        var exception = Record.Exception(() => CidrMath.TryParse(cidr, out _, out _));
++
++        Assert.Null(exception);
++        Assert.False(CidrMath.TryParse(cidr, out _, out _));
++    }
+ }
+diff --git a/tests/ExitBoost.Tests/TunnelOptionsTests.cs b/tests/ExitBoost.Tests/TunnelOptionsTests.cs
+--- a/tests/ExitBoost.Tests/TunnelOptionsTests.cs
++++ b/tests/ExitBoost.Tests/TunnelOptionsTests.cs
+@@ -15,6 +15,42 @@
+     public void FullTunnel_RemainsExplicitWhenRouteListIsEmpty()
+     {
+         var options = new TunnelOptions { Mode = RoutingMode.FullTunnel };
+
+         Assert.Equal("0.0.0.0/0", options.AllowedIpsString);
+     }
++
++    [Fact]
++    public void SyncConf_Omits_AllowedIPs_When_ProcessSplit_Has_No_Routes()
++    {
++        var node = new NodeConfig
++        {
++            PrivateKey = "private-key",
++            PublicKey = "public-key",
++            Host = "203.0.113.10",
++            Port = 51820
++        };
++        var options = new TunnelOptions { Mode = RoutingMode.ProcessSplit };
++
++        var config = WireGuardConfigBuilder.BuildSyncConf(node, options);
++
++        Assert.DoesNotContain("AllowedIPs =", config);
++        Assert.DoesNotContain("AllowedIPs = 0.0.0.0/0", config);
++    }
++
++    [Fact]
++    public void SyncConf_Keeps_Explicit_FullTunnel_Route()
++    {
++        var node = new NodeConfig
++        {
++            PrivateKey = "private-key",
++            PublicKey = "public-key",
++            Host = "203.0.113.10",
++            Port = 51820
++        };
++        var options = new TunnelOptions { Mode = RoutingMode.FullTunnel };
++
++        var config = WireGuardConfigBuilder.BuildSyncConf(node, options);
++
++        Assert.Contains("AllowedIPs = 0.0.0.0/0", config);
++    }
+ }
