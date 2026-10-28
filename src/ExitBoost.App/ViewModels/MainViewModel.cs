@@ -402,6 +402,8 @@ public sealed class MainViewModel : ObservableObject
     private string _gameVpnSuspectText = "";
     private bool _hasGameVpnSuspect;
     private bool _routeGameThroughVpn;
+    private string _gameVpnEndpointsText = "";
+    private readonly HashSet<string> _persistedGameVpnEndpoints = new(StringComparer.OrdinalIgnoreCase);
 
     private sealed record ClashFlowSample(string Address, int Port, long Upload, long Download,
         DateTime LastChangeUtc, DateTime StartUtc);
@@ -1258,6 +1260,8 @@ public sealed class MainViewModel : ObservableObject
         _autoGameVpnFallback = s.AutoGameVpnFallback;
         _vpnGameProcess = s.VpnGameProcess ?? "";
         _routeGameThroughVpn = s.RouteGameThroughVpn;
+        _gameVpnEndpointsText = s.GameVpnEndpoints ?? "";
+        LoadPersistedGameVpnEndpoints();
         App.VpnStore.Routing.GameProcess = _routeGameThroughVpn ? NormalizeGameProcess(_vpnGameProcess) : null;
         _dpiGameTcpPorts = s.DpiGameTcpPorts;
         _dpiGameUdpPorts = s.DpiGameUdpPorts;
@@ -1833,6 +1837,9 @@ public sealed class MainViewModel : ObservableObject
             }
 
             _log.Info($"Точечное правило игры {processExe} → {ip} через VPN применено; прочий трафик остаётся напрямую");
+            // Сохраняем в персистентный список, чтобы правило выжило при переподключении VPN
+            if (_persistedGameVpnEndpoints.Add(ip.ToString()))
+                SavePersistedGameVpnEndpoints();
             return true;
         }
         finally
@@ -3282,6 +3289,16 @@ public sealed class MainViewModel : ObservableObject
             var rule = new VpnGameEndpoint(saved[..separator], saved[(separator + 1)..]);
             if (!routing.GameEndpoints.Contains(rule)) routing.GameEndpoints.Add(rule);
         }
+        // Восстанавливаем сохранённые IP игровых серверов, которые должны идти через VPN
+        foreach (string endpoint in _persistedGameVpnEndpoints)
+        {
+            string process = VpnGameProcess;
+            if (process.Length == 0) break;
+            string procName = Path.GetFileName(process);
+            if (!procName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) procName += ".exe";
+            var rule = new VpnGameEndpoint(procName.ToLowerInvariant(), endpoint);
+            if (!routing.GameEndpoints.Contains(rule)) routing.GameEndpoints.Add(rule);
+        }
         if (_blockedPreset != BlockedListPreset.Off && routing.Mode != "full")
         {
             var preset = _blockedPreset;
@@ -3317,6 +3334,30 @@ public sealed class MainViewModel : ObservableObject
         GameVpnServerStatusText = "";
         App.VpnStore.Routing.GameEndpoints.Clear();
         RefreshVpnStatus();
+    }
+
+    private void LoadPersistedGameVpnEndpoints()
+    {
+        _persistedGameVpnEndpoints.Clear();
+        if (_gameVpnEndpointsText.Length == 0) return;
+        foreach (var part in _gameVpnEndpointsText.Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (IsValidIpOrCidr(part)) _persistedGameVpnEndpoints.Add(part);
+        }
+    }
+
+    private void SavePersistedGameVpnEndpoints()
+    {
+        _gameVpnEndpointsText = string.Join(", ", _persistedGameVpnEndpoints.OrderBy(x => x));
+        _settings.Update(s => s.GameVpnEndpoints = _gameVpnEndpointsText);
+    }
+
+    private static bool IsValidIpOrCidr(string s)
+    {
+        // Поддерживает IP (1.2.3.4) и CIDR (1.2.3.0/24)
+        int slash = s.IndexOf('/');
+        string ipPart = slash >= 0 ? s[..slash] : s;
+        return System.Net.IPAddress.TryParse(ipPart, out _);
     }
 
     private async Task VpnInstallCoreAsync()

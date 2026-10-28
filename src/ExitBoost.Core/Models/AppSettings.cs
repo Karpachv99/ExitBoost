@@ -95,6 +95,10 @@ public sealed class AppSettings
     /// <summary>Весь трафик выбранной игры идёт через VPN (одно правило по процессу).</summary>
     public bool RouteGameThroughVpn { get; set; }
 
+    /// <summary>IP-адреса игровых серверов, которые должны идти через VPN (перечислены через запятую).
+    /// Заполняется автоматически при срабатывании автообхода; можно добавить вручную (например, подсеть 134.168.255.0/24).</summary>
+    public string GameVpnEndpoints { get; set; } = "";
+
     /// <summary>TCP-порты игры для обхода DPI (через запятую).</summary>
     public string DpiGameTcpPorts { get; set; } = "";
 
