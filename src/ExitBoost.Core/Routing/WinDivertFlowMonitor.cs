@@ -50,9 +50,17 @@ public sealed class WinDivertFlowMonitor : IDisposable
     private CancellationTokenSource? _stop;
     private Task? _worker;
     private Task? _networkWorker;
+    private long _networkPacketsReceived;
+    private long _networkPacketsParsed;
+    private long _networkPacketsMatched;
     private bool _disposed;
 
     public Action<string>? Log { get; set; }
+
+    /// <summary>Диагностика пассивного анализа: сколько пакетов реально пришло и совпало с потоками.</summary>
+    public (long Received, long Parsed, long Matched) NetworkPacketStats =>
+        (Interlocked.Read(ref _networkPacketsReceived), Interlocked.Read(ref _networkPacketsParsed),
+            Interlocked.Read(ref _networkPacketsMatched));
 
     public bool IsListening
     {
@@ -365,14 +373,19 @@ public sealed class WinDivertFlowMonitor : IDisposable
 
                 var evt = Marshal.PtrToStructure<DivertAddress>(address);
                 bool outbound = (evt.LayerEventFlags & (1u << 17)) != 0;
+                Interlocked.Increment(ref _networkPacketsReceived);
                 if (!TryParseNetworkPacket(packet, receivedLength, outbound, out var observation)) continue;
+                Interlocked.Increment(ref _networkPacketsParsed);
 
                 string key = TupleKey(observation.Protocol, observation.RemoteAddress, observation.LocalPort, observation.RemotePort);
                 bool knownFlow = observation.Protocol == "tcp"
                     ? _tcpFlowsByTuple.ContainsKey(key)
                     : _flowsByTuple.ContainsKey(key);
                 if (knownFlow && _packetHistory.TryGetValue(key, out var history))
+                {
                     history.Add(outbound, observation.PayloadBytes, observation.TcpFlags, DateTime.UtcNow);
+                    Interlocked.Increment(ref _networkPacketsMatched);
+                }
             }
         }
         catch (Exception ex)

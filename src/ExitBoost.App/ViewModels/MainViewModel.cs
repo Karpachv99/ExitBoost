@@ -73,6 +73,8 @@ public sealed class MainViewModel : ObservableObject
         ImportConfigCommand = new RelayCommand(_ => { ImportConfig(); return Task.CompletedTask; });
         ExportNodesCommand = new RelayCommand(_ => { ExportNodes(); return Task.CompletedTask; });
         RefreshProcessesCommand = new RelayCommand(() => { RefreshProcesses(); return Task.CompletedTask; });
+        GameVpnApplyCommand = new RelayCommand(ApplyGameVpnSuspectAsync,
+            () => _gameVpnSuspectAddress.Length > 0 && !_vpnBusy);
         OpenWireGuardSiteCommand = new RelayCommand(() =>
         {
             Process.Start(new ProcessStartInfo("https://www.wireguard.com/install/") { UseShellExecute = true });
@@ -177,6 +179,9 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand ImportConfigCommand { get; }
     public RelayCommand ExportNodesCommand { get; }
     public RelayCommand RefreshProcessesCommand { get; }
+
+    /// <summary>Ручной перевод замолчавшего игрового сервера через VPN.</summary>
+    public RelayCommand GameVpnApplyCommand { get; }
     public RelayCommand OpenWireGuardSiteCommand { get; }
     public RelayCommand RestoreNetworkCommand { get; }
     public RelayCommand CopyLogCommand { get; }
@@ -388,6 +393,17 @@ public sealed class MainViewModel : ObservableObject
     private readonly Dictionary<string, DateTime> _gameTcpConnectAttempts = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _autoGameVpnEndpoints = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _gameSuspectsLogged = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SingBoxConnectionsClient _clashConnections = new(SingBoxConfigBuilder.ControlPort);
+    private readonly Dictionary<string, ClashFlowSample> _gameClashSamples = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _gameClashStrikes = new(StringComparer.OrdinalIgnoreCase);
+    private string _gameVpnServerStatusText = "";
+    private string _gameVpnSuspectAddress = "";
+    private string _gameVpnSuspectReason = "";
+    private string _gameVpnSuspectText = "";
+    private bool _hasGameVpnSuspect;
+
+    private sealed record ClashFlowSample(string Address, int Port, long Upload, long Download,
+        DateTime LastChangeUtc, DateTime StartUtc);
     private string _dpiBaselineText = "—";
     private string _dpiBestText = "—";
     private bool _isDpiBusy;
@@ -760,6 +776,10 @@ public sealed class MainViewModel : ObservableObject
             {
                 _gameTcpConnectAttempts.Clear();
                 _autoGameVpnEndpoints.Clear();
+                _gameClashSamples.Clear();
+                _gameClashStrikes.Clear();
+                GameVpnServerStatusText = "";
+                ClearGameVpnSuspect();
                 App.VpnStore.Routing.GameEndpoints.Clear();
             }
             RefreshGameVpnStatus();
@@ -780,6 +800,10 @@ public sealed class MainViewModel : ObservableObject
             if (!Set(ref _vpnGameProcess, next)) return;
             _settings.Update(s => s.VpnGameProcess = _vpnGameProcess);
             _gameTcpConnectAttempts.Clear();
+            _gameClashSamples.Clear();
+            _gameClashStrikes.Clear();
+            GameVpnServerStatusText = "";
+            ClearGameVpnSuspect();
             RefreshGameVpnStatus();
         }
     }
@@ -800,6 +824,29 @@ public sealed class MainViewModel : ObservableObject
     {
         get => _gameVpnTrafficText;
         private set => Set(ref _gameVpnTrafficText, value);
+    }
+
+    public string GameVpnServerStatusText
+    {
+        get => _gameVpnServerStatusText;
+        private set => Set(ref _gameVpnServerStatusText, value);
+    }
+
+    /// <summary>Текст кнопки ручного перевода замолчавшего игрового сервера через VPN.</summary>
+    public string GameVpnSuspectText
+    {
+        get => _gameVpnSuspectText;
+        private set => Set(ref _gameVpnSuspectText, value);
+    }
+
+    public bool HasGameVpnSuspect
+    {
+        get => _hasGameVpnSuspect;
+        private set
+        {
+            if (!Set(ref _hasGameVpnSuspect, value)) return;
+            GameVpnApplyCommand.RaiseCanExecuteChanged();
+        }
     }
 
     /// <summary>IP-адреса серверов игры (по одному в строке).</summary>
@@ -1476,8 +1523,10 @@ public sealed class MainViewModel : ObservableObject
             && DateTime.UtcNow - _gameVpnLastHeartbeatUtc >= TimeSpan.FromSeconds(60))
         {
             _gameVpnLastHeartbeatUtc = DateTime.UtcNow;
+            var wire = App.GameFlowMonitor.NetworkPacketStats;
             _log.Info($"Автообход игры: {Path.GetFileNameWithoutExtension(processName)} — " +
-                      $"{_gameVpnTrafficDetail}; правил применено {_autoGameVpnEndpoints.Count}");
+                      $"{_gameVpnTrafficDetail}; {GameVpnServerStatusText}; " +
+                      $"WinDivert пакетов {wire.Received}/{wire.Matched}; правил применено {_autoGameVpnEndpoints.Count}");
         }
     }
 
@@ -1508,6 +1557,13 @@ public sealed class MainViewModel : ObservableObject
             DateTime now = DateTime.UtcNow;
             var gameConnections = pids.SelectMany(ConnectionTable.GetByPid).ToList();
             App.GameFlowMonitor.TrackTcpConnections(gameConnections);
+
+            // Точный контроль ответов сервера через Clash API sing-box: у каждого
+            // соединения есть счётчики отправлено/получено. Работает даже там, где
+            // пассивный WinDivert не видит трафик TUN.
+            var candidates = new List<(string Address, string Reason)>();
+            await CheckServerResponsesAsync(gameConnections, candidates).ConfigureAwait(true);
+
             var pending = gameConnections
                 .Where(c => c.Protocol == "TCP" && c.State == "SYN_SENT"
                             && System.Net.IPAddress.TryParse(c.RemoteAddress, out var ip)
@@ -1518,7 +1574,6 @@ public sealed class MainViewModel : ObservableObject
             foreach (string stale in _gameTcpConnectAttempts.Keys.Where(k => !pending.ContainsKey(k)).ToList())
                 _gameTcpConnectAttempts.Remove(stale);
 
-            var candidates = new List<(string Address, string Reason)>();
             foreach (var (attemptKey, connection) in pending)
             {
                 if (!_gameTcpConnectAttempts.TryGetValue(attemptKey, out DateTime firstSeen))
@@ -1566,6 +1621,133 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Следит за ответами сервера по счётчикам sing-box. Если игра отправляет
+    /// данные, а получено от сервера не растёт дольше 8 секунд — сервер молчит.
+    /// Повторные короткие соединения без данных тоже считаются признаком блокировки.
+    /// </summary>
+    private async Task CheckServerResponsesAsync(List<ConnectionInfo> gameConnections,
+        List<(string Address, string Reason)> candidates)
+    {
+        var localPorts = gameConnections
+            .Where(c => c.Protocol == "TCP" && c.State == "ESTABLISHED")
+            .Select(c => c.LocalPort)
+            .ToHashSet();
+        if (localPorts.Count == 0)
+        {
+            GameVpnServerStatusText = "";
+            return;
+        }
+
+        var flows = (await _clashConnections.GetAsync().ConfigureAwait(true))
+            .Where(f => f.Network.Equals("tcp", StringComparison.OrdinalIgnoreCase) && localPorts.Contains(f.SourcePort))
+            .ToList();
+
+        if (flows.Count == 0)
+        {
+            // Ядро могло не отдать API: не выдумываем выводы.
+            GameVpnServerStatusText = "Ответы сервера: нет данных от sing-box API";
+            return;
+        }
+
+        DateTime now = DateTime.UtcNow;
+        var alive = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string silentAddress = "";
+        int silentSeconds = 0;
+
+        foreach (var flow in flows)
+        {
+            alive.Add(flow.Id);
+            if (!_gameClashSamples.TryGetValue(flow.Id, out var sample))
+            {
+                _gameClashSamples[flow.Id] = new ClashFlowSample(flow.DestinationIP, flow.DestinationPort,
+                    flow.Upload, flow.Download, now, flow.StartUtc);
+                continue;
+            }
+
+            if (flow.Download > sample.Download || flow.Upload > sample.Upload)
+            {
+                _gameClashSamples[flow.Id] = sample with
+                {
+                    Upload = flow.Upload,
+                    Download = flow.Download,
+                    LastChangeUtc = flow.Download > sample.Download ? now : sample.LastChangeUtc
+                };
+                continue;
+            }
+
+            int waiting = (int)(now - sample.LastChangeUtc).TotalSeconds;
+            if (waiting >= 12 && (flow.Upload > sample.Upload || flow.Download < 65536))
+            {
+                // Сервер принял соединение, но перестал присылать данные.
+                // Автоматически перезапускать ядро в этот момент нельзя: это
+                // оборвёт текущее соединение игры. Показываем кнопку.
+                SetGameVpnSuspect(flow.DestinationIP,
+                    $"сервер {flow.DestinationIP}:{flow.DestinationPort} молчит {waiting} с" +
+                    (flow.Download < 65536 ? $", получено всего {flow.Download} байт" : ""));
+                silentAddress = flow.DestinationIP;
+                silentSeconds = waiting;
+            }
+        }
+
+        // Соединение исчезло: если сервер закрыл его почти сразу и ничего не отдал,
+        // это признак «подключился, но не пускает».
+        foreach (string id in _gameClashSamples.Keys.Where(key => !alive.Contains(key)).ToList())
+        {
+            var sample = _gameClashSamples[id];
+            _gameClashSamples.Remove(id);
+            if (sample.Download >= 4096 || now - sample.StartUtc > TimeSpan.FromSeconds(30)) continue;
+            _gameClashStrikes.TryGetValue(sample.Address, out int strikes);
+            strikes++;
+            _gameClashStrikes[sample.Address] = strikes;
+            if (strikes >= 2)
+            {
+                candidates.Add((sample.Address,
+                    $"сервер {sample.Address}:{sample.Port} {strikes} раза закрыл соединение без данных"));
+                _gameClashStrikes[sample.Address] = 0;
+            }
+        }
+
+        GameVpnServerStatusText = silentAddress.Length > 0
+            ? $"Ответы сервера: {silentAddress} молчит {silentSeconds} с"
+            : $"Ответы сервера: идут ({flows.Count} соединений)";
+
+        if (silentAddress.Length == 0) ClearGameVpnSuspect();
+    }
+
+    /// <summary>Запоминает сервер, который молчит, и предлагает перевести только его через VPN.</summary>
+    private void SetGameVpnSuspect(string address, string reason)
+    {
+        bool changed = !_gameVpnSuspectAddress.Equals(address, StringComparison.OrdinalIgnoreCase);
+        _gameVpnSuspectAddress = address;
+        _gameVpnSuspectReason = reason;
+        GameVpnSuspectText = $"Перевести сервер {address} через VPN";
+        HasGameVpnSuspect = true;
+        if (changed)
+            _log.Warn($"Автообход игры: {reason}. Можно перевести этот адрес через VPN кнопкой в настройках.");
+    }
+
+    private void ClearGameVpnSuspect()
+    {
+        if (_gameVpnSuspectAddress.Length == 0 && !_hasGameVpnSuspect) return;
+        _gameVpnSuspectAddress = "";
+        _gameVpnSuspectReason = "";
+        GameVpnSuspectText = "";
+        HasGameVpnSuspect = false;
+    }
+
+    private async Task ApplyGameVpnSuspectAsync()
+    {
+        string address = _gameVpnSuspectAddress;
+        string processName = (VpnGameProcess ?? "").Trim();
+        if (address.Length == 0 || processName.Length == 0) return;
+
+        string reason = _gameVpnSuspectReason.Length > 0 ? _gameVpnSuspectReason : "ручной перевод сервера";
+        string exe = Path.GetFileNameWithoutExtension(processName) + ".exe";
+        if (await ApplyGameVpnEndpointAsync(exe, address, reason).ConfigureAwait(true))
+            ClearGameVpnSuspect();
+    }
+
     private async Task<bool> ApplyGameVpnEndpointAsync(string processExe, string address, string reason)
     {
         if (!System.Net.IPAddress.TryParse(address, out var ip) || System.Net.IPAddress.IsLoopback(ip)
@@ -1574,6 +1756,8 @@ public sealed class MainViewModel : ObservableObject
 
         string endpointKey = processExe.ToLowerInvariant() + "|" + ip;
         if (!_autoGameVpnEndpoints.Add(endpointKey)) return false;
+        _gameClashStrikes.Clear();
+        _gameClashSamples.Clear();
         _log.Warn($"Автообход игры: подозрительный сервер {ip} ({reason}); добавляю только его адрес через VPN");
         _vpnBusy = true;
         try
@@ -3073,6 +3257,9 @@ public sealed class MainViewModel : ObservableObject
         await App.Vpn.DisconnectAsync().ConfigureAwait(true);
         _autoGameVpnEndpoints.Clear();
         _gameTcpConnectAttempts.Clear();
+        _gameClashSamples.Clear();
+        _gameClashStrikes.Clear();
+        GameVpnServerStatusText = "";
         App.VpnStore.Routing.GameEndpoints.Clear();
         RefreshVpnStatus();
     }

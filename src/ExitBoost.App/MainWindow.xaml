@@ -1388,7 +1388,13 @@
                                     <TextBlock Text="{Binding GameVpnMonitorStatusText}" Style="{StaticResource Muted}"
                                                Margin="0,0,0,3" TextWrapping="Wrap" />
                                     <TextBlock Text="{Binding GameVpnTrafficText}" Style="{StaticResource Muted}"
-                                               Margin="0,0,0,10" TextWrapping="Wrap" />
+                                               Margin="0,0,0,3" TextWrapping="Wrap" />
+                                    <TextBlock Text="{Binding GameVpnServerStatusText}" Style="{StaticResource Muted}"
+                                               Margin="0,0,0,6" TextWrapping="Wrap" />
+                                    <Button Content="{Binding GameVpnSuspectText}" Command="{Binding GameVpnApplyCommand}"
+                                            HorizontalAlignment="Left" Margin="0,0,0,10"
+                                            IsEnabled="{Binding HasGameVpnSuspect}"
+                                            ToolTip="Добавляет точечное правило только для этого IP игры. Ядро перезапустится, игра переподключится." />
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
