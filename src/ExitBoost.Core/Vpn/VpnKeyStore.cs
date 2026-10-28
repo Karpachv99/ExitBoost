@@ -20,6 +20,9 @@ public sealed class VpnRoutingConfig
     /// <summary>Временные endpoint-правила автообхода игры; не сохраняются в keys.json.</summary>
     public List<VpnGameEndpoint> GameEndpoints { get; set; } = [];
 
+    /// <summary>Вся игра через VPN по имени процесса; не сохраняется в keys.json.</summary>
+    public string? GameProcess { get; set; }
+
     /// <summary>MTU TUN-адаптера: 1400 подходит для PPPoE, 1500 — для обычного Ethernet.</summary>
     public int Mtu { get; set; } = 1400;
 
@@ -29,6 +32,7 @@ public sealed class VpnRoutingConfig
         Domains = [.. Domains],
         Processes = [.. Processes],
         GameEndpoints = [.. GameEndpoints],
+        GameProcess = GameProcess,
         Mtu = Mtu
     };
 
@@ -56,6 +60,10 @@ public sealed class VpnRoutingConfig
                 System.Net.IPAddress.Parse(e.Address).ToString()))
             .Distinct()
             .ToList();
+        GameProcess = string.IsNullOrWhiteSpace(GameProcess)
+            ? null
+            : (GameProcess.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? GameProcess : GameProcess + ".exe")
+                .ToLowerInvariant();
     }
 }
 

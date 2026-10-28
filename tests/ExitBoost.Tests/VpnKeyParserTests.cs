@@ -485,6 +485,48 @@ public class VpnKeyParserTests
     }
 
     [Fact]
+    public void Config_Split_Routes_Whole_Game_Process_Through_Vpn()
+    {
+        var key = new VpnKey
+        {
+            Protocol = VpnProtocol.Vless,
+            Address = "vpn.example.com",
+            Port = 443,
+            UserId = "uuid",
+            Security = "tls",
+            Sni = "vpn.example.com"
+        };
+        var routing = new VpnRoutingConfig
+        {
+            Mode = "split",
+            Domains = ["opencode.ai"],
+            GameProcess = "pathofexilesteam.exe"
+        };
+
+        string json = SingBoxConfigBuilder.Build(key, routing);
+        using var document = JsonDocument.Parse(json);
+        var rules = document.RootElement.GetProperty("route").GetProperty("rules");
+        var gameRule = rules.EnumerateArray().Single(rule =>
+            rule.TryGetProperty("process_name", out var process) && process.ToString().Contains("pathofexilesteam.exe"));
+
+        Assert.Equal("route", gameRule.GetProperty("action").GetString());
+        Assert.Equal("vpn", gameRule.GetProperty("outbound").GetString());
+        Assert.Equal("direct", document.RootElement.GetProperty("route").GetProperty("final").GetString());
+    }
+
+    [Fact]
+    public void Routing_Normalize_Adds_Exe_To_Game_Process_And_Drops_Empty()
+    {
+        var routing = new VpnRoutingConfig { GameProcess = "Game" };
+        routing.Normalize();
+        Assert.Equal("game.exe", routing.GameProcess);
+
+        routing.GameProcess = "   ";
+        routing.Normalize();
+        Assert.Null(routing.GameProcess);
+    }
+
+    [Fact]
     public void Config_Full_Sends_All_Dns_Through_Vpn()
     {
         var key = new VpnKey

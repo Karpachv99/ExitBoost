@@ -92,6 +92,9 @@ public sealed class AppSettings
     /// <summary>Имя процесса, отслеживаемого игровым автообходом VPN (не настройка DPI).</summary>
     public string VpnGameProcess { get; set; } = "";
 
+    /// <summary>Весь трафик выбранной игры идёт через VPN (одно правило по процессу).</summary>
+    public bool RouteGameThroughVpn { get; set; }
+
     /// <summary>TCP-порты игры для обхода DPI (через запятую).</summary>
     public string DpiGameTcpPorts { get; set; } = "";
 

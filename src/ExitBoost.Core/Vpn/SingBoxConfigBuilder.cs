@@ -137,6 +137,20 @@ public static class SingBoxConfigBuilder
 
             if (!full)
             {
+                // Игровой режим: весь трафик выбранной игры через VPN.
+                // Это одно правило по процессу — серверы игры могут меняться.
+                if (!string.IsNullOrWhiteSpace(routing.GameProcess))
+                {
+                    w.WriteStartObject();
+                    w.WriteString("action", "route");
+                    w.WriteString("outbound", VpnOutboundTag);
+                    w.WritePropertyName("process_name");
+                    w.WriteStartArray();
+                    w.WriteStringValue(routing.GameProcess);
+                    w.WriteEndArray();
+                    w.WriteEndObject();
+                }
+
                 // Точный авто-fallback имеет приоритет над общим правилом
                 // process_name: только выбранная игра + конкретный IP сервера.
                 foreach (var endpoint in routing.GameEndpoints)

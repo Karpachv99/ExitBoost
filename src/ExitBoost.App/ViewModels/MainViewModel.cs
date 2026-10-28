@@ -401,6 +401,7 @@ public sealed class MainViewModel : ObservableObject
     private string _gameVpnSuspectReason = "";
     private string _gameVpnSuspectText = "";
     private bool _hasGameVpnSuspect;
+    private bool _routeGameThroughVpn;
 
     private sealed record ClashFlowSample(string Address, int Port, long Upload, long Download,
         DateTime LastChangeUtc, DateTime StartUtc);
@@ -783,6 +784,49 @@ public sealed class MainViewModel : ObservableObject
                 App.VpnStore.Routing.GameEndpoints.Clear();
             }
             RefreshGameVpnStatus();
+        }
+    }
+
+    /// <summary>Включает весь трафик выбранной игры в VPN одним правилом по процессу.</summary>
+    public bool RouteGameThroughVpn
+    {
+        get => _routeGameThroughVpn;
+        set
+        {
+            if (!Set(ref _routeGameThroughVpn, value)) return;
+            _settings.Update(s => s.RouteGameThroughVpn = value);
+            App.VpnStore.Routing.GameProcess = value ? NormalizeGameProcess(VpnGameProcess) : null;
+            RefreshGameVpnStatus();
+            // Правило живёт в конфиге ядра, поэтому применяем сразу переподключением.
+            if (IsVpnRunning && !_vpnBusy) _ = ReconnectForGameRoutingAsync();
+        }
+    }
+
+    private static string? NormalizeGameProcess(string? processName)
+    {
+        string value = (processName ?? "").Trim();
+        if (value.Length == 0) return null;
+        value = Path.GetFileName(value);
+        if (!value.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) value += ".exe";
+        return value.ToLowerInvariant();
+    }
+
+    private async Task ReconnectForGameRoutingAsync()
+    {
+        var key = App.Vpn.ActiveKey;
+        if (key is null) return;
+        _vpnBusy = true;
+        try
+        {
+            _log.Info(RouteGameThroughVpn
+                ? "Игровой режим: весь трафик выбранной игры идёт через VPN, остальное — напрямую"
+                : "Игровой режим выключен: трафик игры снова идёт напрямую");
+            await ConnectVpnCoreAsync(key).ConfigureAwait(true);
+        }
+        finally
+        {
+            _vpnBusy = false;
+            GameVpnApplyCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -1213,6 +1257,8 @@ public sealed class MainViewModel : ObservableObject
         _dpiGameProcess = s.DpiGameProcess ?? "";
         _autoGameVpnFallback = s.AutoGameVpnFallback;
         _vpnGameProcess = s.VpnGameProcess ?? "";
+        _routeGameThroughVpn = s.RouteGameThroughVpn;
+        App.VpnStore.Routing.GameProcess = _routeGameThroughVpn ? NormalizeGameProcess(_vpnGameProcess) : null;
         _dpiGameTcpPorts = s.DpiGameTcpPorts;
         _dpiGameUdpPorts = s.DpiGameUdpPorts;
         _dpiApplyOnConnect = s.DpiApplyOnConnect;
@@ -1502,6 +1548,10 @@ public sealed class MainViewModel : ObservableObject
             GameVpnStatusText = "Игра обнаружена, но VPN не подключён";
         else if (App.VpnStore.Routing.Mode == "full")
             GameVpnStatusText = "Весь трафик уже идёт через VPN";
+        else if (RouteGameThroughVpn)
+            GameVpnStatusText = _vpnGameProcess.Length > 0
+                ? $"Вся игра {Path.GetFileNameWithoutExtension(_vpnGameProcess)} идёт через VPN, остальное — напрямую"
+                : "Игровой режим включён, но игра не выбрана";
         else if (_autoGameVpnEndpoints.Count > 0)
         {
             string endpoints = string.Join(", ", _autoGameVpnEndpoints
@@ -1712,7 +1762,7 @@ public sealed class MainViewModel : ObservableObject
             ? $"Ответы сервера: {silentAddress} молчит {silentSeconds} с"
             : $"Ответы сервера: идут ({flows.Count} соединений)";
 
-        if (silentAddress.Length == 0) ClearGameVpnSuspect();
+        if (silentAddress.Length == 0 || RouteGameThroughVpn) ClearGameVpnSuspect();
     }
 
     /// <summary>Запоминает сервер, который молчит, и предлагает перевести только его через VPN.</summary>
@@ -3220,6 +3270,11 @@ public sealed class MainViewModel : ObservableObject
         // Готовый список добавляем к доменам пользователя, не меняя их в интерфейсе:
         // выключение переключателя сразу возвращает прежний набор.
         var routing = App.VpnStore.Routing.Clone();
+        // «Вся игра через VPN»: одно правило по процессу. Проверено на практике:
+        // если провайдер мешает игровой сессии, помогает именно полный маршрут игры.
+        routing.GameProcess = RouteGameThroughVpn
+            ? NormalizeGameProcess(VpnGameProcess)
+            : null;
         foreach (string saved in _autoGameVpnEndpoints)
         {
             int separator = saved.IndexOf('|');
