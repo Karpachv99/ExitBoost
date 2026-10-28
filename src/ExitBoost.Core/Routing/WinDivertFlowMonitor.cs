@@ -10,7 +10,13 @@ public sealed record UdpFlowInfo(int ProcessId, string RemoteAddress, int LocalP
 public sealed record UdpFlowHealth(int ProcessId, string RemoteAddress, int LocalPort, int RemotePort,
     int OutboundPackets, int InboundPackets, DateTime FirstOutboundUtc, DateTime LastOutboundUtc);
 public sealed record TcpFlowHealth(int ProcessId, string RemoteAddress, int LocalPort, int RemotePort,
-    int OutboundPayloadPackets, DateTime FirstOutboundUtc, DateTime LastOutboundUtc);
+    int OutboundPayloadPackets, int InboundPayloadPackets, int RemoteResets,
+    long OutboundBytes, long InboundBytes,
+    DateTime FirstOutboundUtc, DateTime LastOutboundUtc, DateTime LastResetUtc);
+
+/// <summary>Сводка сетевого обмена выбранной игры: видно, что монитор действительно работает.</summary>
+public sealed record GameFlowStats(int TcpFlows, int UdpFlows,
+    long OutboundPackets, long InboundPackets, long OutboundBytes, long InboundBytes, int RemoteResets);
 
 /// <summary>
 /// Слушает WinDivert FLOW-события для сопоставления TCP/UDP 5-tuple с PID и
@@ -159,8 +165,10 @@ public sealed class WinDivertFlowMonitor : IDisposable
     }
 
     /// <summary>
-    /// Established TCP flows with repeated outgoing payload and no incoming
-    /// packets for a sustained interval. Helps catch app-level stalls after SYN succeeds.
+    /// TCP-потоки выбранного процесса, которые выглядят заблокированными:
+    /// либо игра шлёт данные, а ответных данных нет больше 8 секунд,
+    /// либо сервер дважды подряд сбросил соединение (RST) — типичный признак
+    /// «подключился, но не пускает».
     /// </summary>
     public IReadOnlyList<TcpFlowHealth> GetStalledTcpFlows(int processId, TimeSpan? window = null)
     {
@@ -173,16 +181,57 @@ public sealed class WinDivertFlowMonitor : IDisposable
             string key = TupleKey("tcp", flow.RemoteAddress, flow.LocalPort, flow.RemotePort);
             if (!_packetHistory.TryGetValue(key, out var history)) continue;
             var snapshot = history.Snapshot(now - interval);
-            if (snapshot.OutboundPackets >= 3 && snapshot.InboundPackets == 0
-                && snapshot.FirstOutboundUtc != default
-                && now - snapshot.FirstOutboundUtc >= TimeSpan.FromSeconds(8))
-                result.Add(new TcpFlowHealth(processId, flow.RemoteAddress, flow.LocalPort, flow.RemotePort,
-                    snapshot.OutboundPackets, snapshot.FirstOutboundUtc, snapshot.LastOutboundUtc));
+            bool silent = snapshot.OutboundPackets >= 3 && snapshot.InboundPackets == 0
+                          && snapshot.FirstOutboundUtc != default
+                          && now - snapshot.FirstOutboundUtc >= TimeSpan.FromSeconds(8);
+            bool reset = snapshot.Resets >= 2 && snapshot.LastResetUtc != default
+                         && now - snapshot.LastResetUtc <= TimeSpan.FromMinutes(2);
+            if (!silent && !reset) continue;
+            result.Add(new TcpFlowHealth(processId, flow.RemoteAddress, flow.LocalPort, flow.RemotePort,
+                snapshot.OutboundPackets, snapshot.InboundPackets, snapshot.Resets,
+                snapshot.OutboundBytes, snapshot.InboundBytes,
+                snapshot.FirstOutboundUtc, snapshot.LastOutboundUtc, snapshot.LastResetUtc));
         }
         return result
             .GroupBy(f => (f.RemoteAddress, f.LocalPort, f.RemotePort))
             .Select(g => g.OrderByDescending(f => f.LastOutboundUtc).First())
             .ToList();
+    }
+
+    /// <summary>Сводка по всем потокам процесса: счётчики пакетов, байтов и сбросов.</summary>
+    public GameFlowStats GetFlowStats(int processId)
+    {
+        DateTime now = DateTime.UtcNow;
+        int tcp = 0, udp = 0;
+        long outPackets = 0, inPackets = 0, outBytes = 0, inBytes = 0;
+        int resets = 0;
+
+        foreach (var flow in _tcpFlowsByTuple.Values.Where(f => f.ProcessId == processId && now - f.SeenUtc <= Retention))
+        {
+            string key = TupleKey("tcp", flow.RemoteAddress, flow.LocalPort, flow.RemotePort);
+            if (!_packetHistory.TryGetValue(key, out var history)) continue;
+            var totals = history.Totals();
+            tcp++;
+            outPackets += totals.OutboundPackets;
+            inPackets += totals.InboundPackets;
+            outBytes += totals.OutboundBytes;
+            inBytes += totals.InboundBytes;
+            resets += totals.Resets;
+        }
+
+        foreach (var flow in _flows.Values.Where(f => f.ProcessId == processId && now - f.SeenUtc <= Retention))
+        {
+            string key = TupleKey("udp", flow.RemoteAddress, flow.LocalPort, flow.RemotePort);
+            if (!_packetHistory.TryGetValue(key, out var history)) continue;
+            var totals = history.Totals();
+            udp++;
+            outPackets += totals.OutboundPackets;
+            inPackets += totals.InboundPackets;
+            outBytes += totals.OutboundBytes;
+            inBytes += totals.InboundBytes;
+        }
+
+        return new GameFlowStats(tcp, udp, outPackets, inPackets, outBytes, inBytes, resets);
     }
 
     /// <summary>Registers already-established process TCP connections so monitoring can start mid-session.</summary>
@@ -323,7 +372,7 @@ public sealed class WinDivertFlowMonitor : IDisposable
                     ? _tcpFlowsByTuple.ContainsKey(key)
                     : _flowsByTuple.ContainsKey(key);
                 if (knownFlow && _packetHistory.TryGetValue(key, out var history))
-                    history.Add(outbound, observation.PayloadBytes, DateTime.UtcNow);
+                    history.Add(outbound, observation.PayloadBytes, observation.TcpFlags, DateTime.UtcNow);
             }
         }
         catch (Exception ex)
@@ -405,10 +454,12 @@ public sealed class WinDivertFlowMonitor : IDisposable
         if (sourcePort == 0 || destinationPort == 0) return false;
 
         int payloadBytes = 0;
+        int tcpFlags = 0;
         if (transportProtocol == TcpProtocol)
         {
             int tcpHeaderLength = (Marshal.ReadByte(packet, transportOffset + 12) >> 4) * 4;
             if (tcpHeaderLength < 20 || packetLength < transportOffset + tcpHeaderLength) return false;
+            tcpFlags = Marshal.ReadByte(packet, transportOffset + 13);
             payloadBytes = packetLength - transportOffset - tcpHeaderLength;
         }
         else
@@ -422,37 +473,58 @@ public sealed class WinDivertFlowMonitor : IDisposable
             ? mapped.MapToIPv4().ToString()
             : (outbound ? destination : source).ToString();
         observation = outbound
-            ? new PacketObservation(transportProtocol == TcpProtocol ? "tcp" : "udp", remoteAddress, sourcePort, destinationPort, payloadBytes)
-            : new PacketObservation(transportProtocol == TcpProtocol ? "tcp" : "udp", remoteAddress, destinationPort, sourcePort, payloadBytes);
+            ? new PacketObservation(transportProtocol == TcpProtocol ? "tcp" : "udp", remoteAddress, sourcePort, destinationPort, payloadBytes, tcpFlags)
+            : new PacketObservation(transportProtocol == TcpProtocol ? "tcp" : "udp", remoteAddress, destinationPort, sourcePort, payloadBytes, tcpFlags);
         return true;
     }
 
     private static string TupleKey(string protocol, string remoteAddress, int localPort, int remotePort) =>
         $"{protocol}|{remoteAddress}|{localPort}|{remotePort}";
 
-    private readonly record struct PacketObservation(string Protocol, string RemoteAddress, int LocalPort, int RemotePort, int PayloadBytes);
+    private readonly record struct PacketObservation(string Protocol, string RemoteAddress, int LocalPort, int RemotePort,
+        int PayloadBytes, int TcpFlags);
 
     private sealed class UdpPacketHistory
     {
+        private const int TcpResetFlag = 0x04;
         private readonly string _protocol;
         private readonly object _gate = new();
         private int _outboundPackets;
         private DateTime _firstOutboundUtc;
         private DateTime _lastOutboundUtc;
         private DateTime _lastInboundUtc;
+        private DateTime _lastResetUtc;
+        private long _totalOutbound;
+        private long _totalInbound;
+        private long _outboundBytes;
+        private long _inboundBytes;
+        private int _resets;
 
         public UdpPacketHistory(string protocol) => _protocol = protocol;
 
-        public void Add(bool outbound, int payloadBytes, DateTime time)
+        public void Add(bool outbound, int payloadBytes, int tcpFlags, DateTime time)
         {
             lock (_gate)
             {
                 if (!outbound)
                 {
+                    // RST от сервера: соединение приняли и сразу сбросили.
+                    if (_protocol == "tcp" && (tcpFlags & TcpResetFlag) != 0)
+                    {
+                        _resets = Math.Min(_resets + 1, 1_000_000);
+                        _lastResetUtc = time;
+                        _lastInboundUtc = time;
+                        _outboundPackets = 0;
+                        _firstOutboundUtc = default;
+                        return;
+                    }
+
                     // TCP ACK-only packets confirm transport delivery but don't
                     // prove the game server is returning application data.
                     if (_protocol == "tcp" && payloadBytes == 0) return;
                     _lastInboundUtc = time;
+                    _totalInbound = Math.Min(_totalInbound + 1, 1_000_000_000);
+                    _inboundBytes += payloadBytes;
                     _outboundPackets = 0;
                     _firstOutboundUtc = default;
                     return;
@@ -460,20 +532,36 @@ public sealed class WinDivertFlowMonitor : IDisposable
                 if (_protocol == "tcp" && payloadBytes == 0) return;
                 if (_outboundPackets == 0) _firstOutboundUtc = time;
                 _outboundPackets = Math.Min(_outboundPackets + 1, 1_000_000);
+                _totalOutbound = Math.Min(_totalOutbound + 1, 1_000_000_000);
+                _outboundBytes += payloadBytes;
                 _lastOutboundUtc = time;
             }
         }
 
-        public (int OutboundPackets, int InboundPackets, DateTime FirstOutboundUtc, DateTime LastOutboundUtc) Snapshot(DateTime cutoff)
+        public FlowSnapshot Snapshot(DateTime cutoff)
         {
             lock (_gate)
             {
                 if (_lastOutboundUtc < cutoff || _lastInboundUtc >= _firstOutboundUtc)
-                    return (0, 0, default, default);
-                return (_outboundPackets, 0, _firstOutboundUtc, _lastOutboundUtc);
+                    return new FlowSnapshot(0, 0, _resets, _totalOutbound, _totalInbound,
+                        _outboundBytes, _inboundBytes, default, default, _lastResetUtc);
+                return new FlowSnapshot(_outboundPackets, 0, _resets, _totalOutbound, _totalInbound,
+                    _outboundBytes, _inboundBytes, _firstOutboundUtc, _lastOutboundUtc, _lastResetUtc);
             }
         }
+
+        public FlowSnapshot Totals()
+        {
+            lock (_gate)
+                return new FlowSnapshot(_totalOutbound > 0 ? 1 : 0, 0, _resets, _totalOutbound, _totalInbound,
+                    _outboundBytes, _inboundBytes, _firstOutboundUtc, _lastOutboundUtc, _lastResetUtc);
+        }
     }
+
+    private readonly record struct FlowSnapshot(int OutboundPackets, int InboundPackets, int Resets,
+        long TotalOutboundPackets, long TotalInboundPackets,
+        long OutboundBytes, long InboundBytes,
+        DateTime FirstOutboundUtc, DateTime LastOutboundUtc, DateTime LastResetUtc);
 
     private static string FormatAddress(uint a0, uint a1, uint a2, uint a3, bool ipv6)
     {

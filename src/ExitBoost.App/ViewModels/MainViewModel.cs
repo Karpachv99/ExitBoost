@@ -377,9 +377,17 @@ public sealed class MainViewModel : ObservableObject
     private string _vpnGameProcess = "";
     private string _gameVpnStatusText = "Выберите процесс игры";
     private string _gameVpnMonitorStatusText = "Монитор не запущен";
+    private string _gameVpnTrafficText = "";
+    private string _gameVpnTrafficDetail = "";
+    private bool _refreshingProcesses;
+    private long _gameVpnLastOutbound;
+    private long _gameVpnLastInbound;
+    private DateTime _gameVpnLastChangeUtc = DateTime.MinValue;
+    private DateTime _gameVpnLastHeartbeatUtc = DateTime.MinValue;
     private int _autoGameVpnCheckBusy;
     private readonly Dictionary<string, DateTime> _gameTcpConnectAttempts = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _autoGameVpnEndpoints = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _gameSuspectsLogged = new(StringComparer.OrdinalIgnoreCase);
     private string _dpiBaselineText = "—";
     private string _dpiBestText = "—";
     private bool _isDpiBusy;
@@ -764,7 +772,12 @@ public sealed class MainViewModel : ObservableObject
         get => _vpnGameProcess;
         set
         {
-            if (!Set(ref _vpnGameProcess, value ?? "")) return;
+            string next = (value ?? "").Trim();
+            // Обновление списка процессов очищает ItemsSource и WPF на миг
+            // выставляет SelectedValue=null. Выбор игры из-за этого «слетал»,
+            // поэтому пустое значение во время обновления игнорируем.
+            if (next.Length == 0 && _vpnGameProcess.Length > 0 && _refreshingProcesses) return;
+            if (!Set(ref _vpnGameProcess, next)) return;
             _settings.Update(s => s.VpnGameProcess = _vpnGameProcess);
             _gameTcpConnectAttempts.Clear();
             RefreshGameVpnStatus();
@@ -781,6 +794,12 @@ public sealed class MainViewModel : ObservableObject
     {
         get => _gameVpnMonitorStatusText;
         private set => Set(ref _gameVpnMonitorStatusText, value);
+    }
+
+    public string GameVpnTrafficText
+    {
+        get => _gameVpnTrafficText;
+        private set => Set(ref _gameVpnTrafficText, value);
     }
 
     /// <summary>IP-адреса серверов игры (по одному в строке).</summary>
@@ -1382,7 +1401,8 @@ public sealed class MainViewModel : ObservableObject
     {
         string processName = (VpnGameProcess ?? "").Trim();
         bool selected = processName.Length > 0;
-        bool running = selected && ProcessInspector.FindPids(Path.GetFileNameWithoutExtension(processName)).Count > 0;
+        var pids = selected ? ProcessInspector.FindPids(Path.GetFileNameWithoutExtension(processName)) : [];
+        bool running = pids.Count > 0;
         bool flowMonitor = App.GameFlowMonitor.IsListening;
         bool packetMonitor = App.GameFlowMonitor.CanAnalyzeGamePackets;
 
@@ -1391,6 +1411,39 @@ public sealed class MainViewModel : ObservableObject
             : packetMonitor
                 ? "Монитор TCP/UDP активен; содержимое пакетов не читается"
                 : "Потоки видны, но анализ ответов TCP/UDP недоступен";
+
+        // Живые счётчики: видно, что программа действительно наблюдает игру,
+        // даже когда блокировки нет и правило не применяется.
+        if (running && packetMonitor)
+        {
+            var stats = new GameFlowStats(0, 0, 0, 0, 0, 0, 0);
+            foreach (int pid in pids)
+            {
+                var part = App.GameFlowMonitor.GetFlowStats(pid);
+                stats = new GameFlowStats(stats.TcpFlows + part.TcpFlows, stats.UdpFlows + part.UdpFlows,
+                    stats.OutboundPackets + part.OutboundPackets, stats.InboundPackets + part.InboundPackets,
+                    stats.OutboundBytes + part.OutboundBytes, stats.InboundBytes + part.InboundBytes,
+                    stats.RemoteResets + part.RemoteResets);
+            }
+
+            _gameVpnTrafficDetail = $"TCP {stats.TcpFlows} · UDP {stats.UdpFlows} · " +
+                                    $"пакетов от игры {stats.OutboundPackets} · ответов {stats.InboundPackets}" +
+                                    (stats.RemoteResets > 0 ? $" · сбросов сервером {stats.RemoteResets}" : "");
+            GameVpnTrafficText = "Наблюдение: " + _gameVpnTrafficDetail;
+
+            if (stats.OutboundPackets != _gameVpnLastOutbound || stats.InboundPackets != _gameVpnLastInbound)
+            {
+                _gameVpnLastOutbound = stats.OutboundPackets;
+                _gameVpnLastInbound = stats.InboundPackets;
+                _gameVpnLastChangeUtc = DateTime.UtcNow;
+            }
+        }
+        else
+        {
+            GameVpnTrafficText = "";
+            _gameVpnLastOutbound = 0;
+            _gameVpnLastInbound = 0;
+        }
 
         if (!AutoGameVpnFallback)
             GameVpnStatusText = "Автообход выключен";
@@ -1416,6 +1469,16 @@ public sealed class MainViewModel : ObservableObject
             GameVpnStatusText = "Монитор работает, но без анализа ответов; ждём TCP SYN_SENT";
         else
             GameVpnStatusText = "Игра обнаружена · монитор активен · серверы пока напрямую, ожидаю признаки сбоя";
+
+        // Раз в минуту пишем в журнал, что мониторинг жив: иначе кажется,
+        // что программа ничего не делает.
+        if (running && packetMonitor && AutoGameVpnFallback && IsVpnRunning
+            && DateTime.UtcNow - _gameVpnLastHeartbeatUtc >= TimeSpan.FromSeconds(60))
+        {
+            _gameVpnLastHeartbeatUtc = DateTime.UtcNow;
+            _log.Info($"Автообход игры: {Path.GetFileNameWithoutExtension(processName)} — " +
+                      $"{_gameVpnTrafficDetail}; правил применено {_autoGameVpnEndpoints.Count}");
+        }
     }
 
     /// <summary>
@@ -1469,11 +1532,13 @@ public sealed class MainViewModel : ObservableObject
             }
 
             // Для TCP, где handshake завершился, ловим длительный outbound data
-            // без входящих пакетов. Это покрывает зависание загрузки после connect.
+            // без входящих пакетов и повторные RST от сервера. Второе покрывает
+            // случай «подключился, но сервер сразу выкидывает».
             if (App.GameFlowMonitor.CanAnalyzeGamePackets)
                 candidates.AddRange(pids.SelectMany(pid => App.GameFlowMonitor.GetStalledTcpFlows(pid))
-                    .Select(flow => (flow.RemoteAddress,
-                        $"TCP {flow.RemotePort}: {flow.OutboundPayloadPackets} исходящих пакетов данных без ответа после установки соединения")));
+                    .Select(flow => (flow.RemoteAddress, flow.RemoteResets >= 2
+                        ? $"TCP {flow.RemotePort}: сервер сбросил соединение {flow.RemoteResets} раз"
+                        : $"TCP {flow.RemotePort}: {flow.OutboundPayloadPackets} пакетов данных без ответа")));
 
             // UDP не имеет handshake. Считаем endpoint подозрительным, только если
             // игра отправляет повторные датаграммы, но за окно наблюдения не получает ответов.
@@ -1485,6 +1550,10 @@ public sealed class MainViewModel : ObservableObject
             {
                 if (await ApplyGameVpnEndpointAsync(processBaseName + ".exe", address, reason).ConfigureAwait(true))
                     break;
+
+                string seenKey = processBaseName + "|" + address;
+                if (_gameSuspectsLogged.Add(seenKey))
+                    _log.Info($"Автообход игры: подозрительный сервер {address} ({reason}) уже переведён через VPN");
             }
         }
         catch (Exception ex)
@@ -1581,9 +1650,25 @@ public sealed class MainViewModel : ObservableObject
         // ComboBox игрового режима привязан к DpiGameProcess через SelectedValue:
         // очистка списка обнуляет выбор, поэтому запоминаем имя и возвращаем его.
         string gameProcess = _dpiGameProcess ?? "";
+        // То же для выбора игры автообхода VPN: он не должен сбрасываться.
+        string vpnGame = (_vpnGameProcess ?? "").Trim();
 
-        Processes.Clear();
-        foreach (var p in list) Processes.Add(p);
+        _refreshingProcesses = true;
+        try
+        {
+            Processes.Clear();
+            foreach (var p in list) Processes.Add(p);
+
+            // Выбранная игра может быть не запущена — оставляем её в списке,
+            // иначе ComboBox теряет выбранное значение.
+            if (vpnGame.Length > 0
+                && !Processes.Any(p => string.Equals(p.Name, vpnGame, StringComparison.OrdinalIgnoreCase)))
+                Processes.Add(new SelectedProcess { Pid = 0, Name = vpnGame, WindowTitle = "не запущена" });
+        }
+        finally
+        {
+            _refreshingProcesses = false;
+        }
 
         if (previous is not null)
         {
@@ -1592,6 +1677,9 @@ public sealed class MainViewModel : ObservableObject
 
         if (gameProcess.Length > 0 && _dpiGameProcess != gameProcess)
             DpiGameProcess = gameProcess;
+
+        if (vpnGame.Length > 0 && _vpnGameProcess != vpnGame)
+            VpnGameProcess = vpnGame;
 
         BuildVpnTargets();
     }

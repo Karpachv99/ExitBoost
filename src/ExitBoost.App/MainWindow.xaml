@@ -1380,12 +1380,14 @@
                                     </DockPanel>
                                     <CheckBox Content="Автообход недоступных игровых серверов через VPN (TCP и UDP)"
                                               IsChecked="{Binding AutoGameVpnFallback}" Margin="0,0,0,5"
-                                              ToolTip="TCP: попытка зависла в SYN_SENT 8 секунд. UDP: игра повторно отправляет пакеты без ответов. Маршрут добавляется только для выбранной игры и IP сервера." />
+                                              ToolTip="TCP: попытка зависла в SYN_SENT 8 с, нет ответных данных 8 с или сервер дважды сбросил соединение. UDP: игра повторно отправляет пакеты без ответов. Маршрут добавляется только для выбранной игры и IP сервера." />
                                     <TextBlock Style="{StaticResource Muted}" Margin="22,0,0,8" TextWrapping="Wrap"
-                                               Text="Выбор игры независим от обхода DPI. UDP-блокировка определяется по сетевому обмену (повторы без ответов), это эвристика; остальные адреса остаются напрямую. После смены маршрута игре может потребоваться переподключиться." />
+                                               Text="Выбор игры независим от обхода DPI. Блокировка определяется по сетевому обмену, это эвристика; остальные адреса остаются напрямую. После смены маршрута игре может потребоваться переподключиться." />
                                     <TextBlock Text="{Binding GameVpnStatusText}" Margin="0,0,0,3" TextWrapping="Wrap"
                                                Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" />
                                     <TextBlock Text="{Binding GameVpnMonitorStatusText}" Style="{StaticResource Muted}"
+                                               Margin="0,0,0,3" TextWrapping="Wrap" />
+                                    <TextBlock Text="{Binding GameVpnTrafficText}" Style="{StaticResource Muted}"
                                                Margin="0,0,0,10" TextWrapping="Wrap" />
                                     <Grid>
                                         <Grid.ColumnDefinitions>
