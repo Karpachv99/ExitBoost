@@ -184,6 +184,7 @@ public sealed class BoostController : IAsyncDisposable
         await _tunnel.DisconnectAsync().ConfigureAwait(false);
         _node = null;
         _knownEndpoints.Clear();
+        _endpointTracker.Clear();
         StatusChanged?.Invoke();
     }
 
@@ -310,6 +311,9 @@ public sealed class BoostController : IAsyncDisposable
             await _udpMonitor.StopAsync().ConfigureAwait(false);
         }
 
+        var initialEndpoints = mode == RoutingMode.ProcessSplit && _settings.Current.AutoDetectEndpoints
+            ? DetectTargetEndpoints()
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var (allowedIps, warning) = BuildAllowedIps(mode);
         if (warning is not null)
         {
@@ -342,7 +346,7 @@ public sealed class BoostController : IAsyncDisposable
         // Запоминаем туннель, чтобы его можно было снять после аварийного завершения.
         _stateStore.RememberTunnel(WireGuardBackend.TunnelNameFor(node.Id));
 
-        foreach (var ip in _endpointTracker.Observe(DetectTargetEndpoints(), DateTime.UtcNow))
+        foreach (var ip in _endpointTracker.Observe(initialEndpoints, DateTime.UtcNow))
             _knownEndpoints.Add(ip);
 
         StartWatcher();
