@@ -1,7 +1,5 @@
 using ExitBoost.Core.Configuration;
 using ExitBoost.Core.Dpi;
-using System.Net;
-using System.Net.Sockets;
 using ExitBoost.Core.Logging;
 using ExitBoost.Core.Models;
 using ExitBoost.Core.Networking;
@@ -31,8 +29,7 @@ public sealed class BoostController : IAsyncDisposable
     private readonly NetworkStateStore _stateStore;
     private readonly WinDivertFlowMonitor _udpMonitor;
 
-    private static readonly TimeSpan EndpointRetention = TimeSpan.FromMinutes(10);
-    private readonly Dictionary<string, DateTime> _endpointLastSeen = new(StringComparer.OrdinalIgnoreCase);
+    private readonly GameEndpointTracker _endpointTracker = new();
     private Timer? _watchTimer;
     private readonly HashSet<string> _knownEndpoints = new(StringComparer.OrdinalIgnoreCase);
 
@@ -230,23 +227,14 @@ public sealed class BoostController : IAsyncDisposable
         foreach (var pid in ResolveTargetPids())
         {
             foreach (var ip in ProcessInspector.GetRemoteAddresses(pid))
-                AddIpv4Endpoint(result, ip);
+                if (GameEndpointTracker.TryNormalizeIpv4(ip, out var normalized)) result.Add(normalized);
 
             // Windows' UDP table contains local ports only. WinDivert FLOW events
             // provide the missing remote address and owning PID for UDP game traffic.
             foreach (var flow in _udpMonitor.GetUdpFlows(pid))
-                AddIpv4Endpoint(result, flow.RemoteAddress);
+                if (GameEndpointTracker.TryNormalizeIpv4(flow.RemoteAddress, out var normalized)) result.Add(normalized);
         }
         return result;
-    }
-
-    private static void AddIpv4Endpoint(HashSet<string> endpoints, string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value) || !IPAddress.TryParse(value, out var address)) return;
-        if (address.AddressFamily != AddressFamily.InterNetwork || address.Equals(IPAddress.Any) ||
-            address.Equals(IPAddress.Broadcast) || IPAddress.IsLoopback(address) || address.GetAddressBytes()[0] >= 224)
-            return;
-        endpoints.Add(address.ToString());
     }
 
     /// <summary>Расчёт списка маршрутов для выбранного режима.</summary>
@@ -308,7 +296,7 @@ public sealed class BoostController : IAsyncDisposable
         _node = node;
         _mode = mode;
 
-        _endpointLastSeen.Clear();
+        _endpointTracker.Clear();
         _knownEndpoints.Clear();
         if (mode == RoutingMode.ProcessSplit && _settings.Current.AutoDetectEndpoints)
         {
@@ -354,11 +342,8 @@ public sealed class BoostController : IAsyncDisposable
         // Запоминаем туннель, чтобы его можно было снять после аварийного завершения.
         _stateStore.RememberTunnel(WireGuardBackend.TunnelNameFor(node.Id));
 
-        foreach (var ip in DetectTargetEndpoints())
-        {
+        foreach (var ip in _endpointTracker.Observe(DetectTargetEndpoints(), DateTime.UtcNow))
             _knownEndpoints.Add(ip);
-            _endpointLastSeen[ip] = DateTime.UtcNow;
-        }
 
         StartWatcher();
 
@@ -379,7 +364,7 @@ public sealed class BoostController : IAsyncDisposable
         await _tunnel.DisconnectAsync().ConfigureAwait(false);
         _node = null;
         _knownEndpoints.Clear();
-        _endpointLastSeen.Clear();
+        _endpointTracker.Clear();
         _log.Info("Соединение закрыто");
         StatusChanged?.Invoke();
     }
@@ -409,17 +394,8 @@ public sealed class BoostController : IAsyncDisposable
             if (_mode != RoutingMode.ProcessSplit || !_settings.Current.AutoDetectEndpoints) return;
             if (_node is null || _options is null) return;
 
-            var now = DateTime.UtcNow;
-            var endpoints = DetectTargetEndpoints();
-            foreach (var ep in endpoints) _endpointLastSeen[ep] = now;
-
-            // Keep short-lived TCP/UDP server addresses briefly, then remove them.
-            foreach (var stale in _endpointLastSeen
-                .Where(pair => now - pair.Value > EndpointRetention)
-                .Select(pair => pair.Key).ToList())
-                _endpointLastSeen.Remove(stale);
-
-            var current = _endpointLastSeen.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var current = _endpointTracker.Observe(DetectTargetEndpoints(), DateTime.UtcNow)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             bool changed = !_knownEndpoints.SetEquals(current);
             if (!changed) return;
 
