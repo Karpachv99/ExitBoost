@@ -40,7 +40,11 @@ public sealed class TunnelOptions
     };
 
     /// <summary>Текстовый вид AllowedIPs для конфига WireGuard.</summary>
-    public string AllowedIpsString => AllowedIps.Count == 0 ? "0.0.0.0/0" : string.Join(", ", AllowedIps);
+    // An empty split list must mean "no routed destinations", not a silent full tunnel.
+    // FullTunnel is explicit and normally already carries 0.0.0.0/0 from the route builder.
+    public string AllowedIpsString => AllowedIps.Count == 0
+        ? (Mode == RoutingMode.FullTunnel ? "0.0.0.0/0" : "")
+        : string.Join(", ", AllowedIps);
 
     public override string ToString() => $"{Mode}: {AllowedIpsString}";
 }
