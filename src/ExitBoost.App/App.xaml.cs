@@ -118,7 +118,9 @@ public partial class App : Application
         Routes = new WindowsRouteManager();
         Routes.Log = m => Log.Warn(m);
         Tunnel = new TunnelManager(Routes, Settings);
-        Controller = new BoostController(Settings, Log, Routes, Tunnel);
+        Controller = new BoostController(
+            Settings, Log, Routes, Tunnel,
+            udpEndpointProvider: pid => GameFlowMonitor.GetUdpFlows(pid).Select(flow => flow.RemoteAddress));
 
         Probing = new ProbingService
         {
