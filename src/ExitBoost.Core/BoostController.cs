@@ -232,7 +232,7 @@ public sealed class BoostController : IAsyncDisposable
             // Windows' UDP table contains local ports only. WinDivert FLOW events
             // provide the missing remote address and owning PID for UDP game traffic.
             foreach (var flow in _udpMonitor.GetUdpFlows(pid))
-                if (GameEndpointTracker.TryNormalizeIpv4(flow.RemoteAddress, out var normalized)) result.Add(normalized);
+                if (GameEndpointTracker.TryNormalizeIpv4(flow.RemoteAddress, out var normalizedUdp)) result.Add(normalizedUdp);
         }
         return result;
     }
