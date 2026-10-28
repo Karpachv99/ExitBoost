@@ -99,7 +99,9 @@ public static class WireGuardConfigBuilder
         sb.AppendLine($"PublicKey = {node.PublicKey}");
         if (!string.IsNullOrWhiteSpace(node.PresharedKey))
             sb.AppendLine($"PresharedKey = {node.PresharedKey}");
-        sb.AppendLine($"AllowedIPs = {options.AllowedIpsString}");
+        if (!string.IsNullOrWhiteSpace(options.AllowedIpsString))
+            if (!string.IsNullOrWhiteSpace(options.AllowedIpsString))
+            sb.AppendLine($"AllowedIPs = {options.AllowedIpsString}");
         sb.AppendLine($"Endpoint = {node.Host}:{node.Port}");
         if (node.PersistentKeepalive > 0)
             sb.AppendLine($"PersistentKeepalive = {node.PersistentKeepalive}");
