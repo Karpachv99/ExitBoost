@@ -3289,15 +3289,26 @@ public sealed class MainViewModel : ObservableObject
             var rule = new VpnGameEndpoint(saved[..separator], saved[(separator + 1)..]);
             if (!routing.GameEndpoints.Contains(rule)) routing.GameEndpoints.Add(rule);
         }
-        // Восстанавливаем сохранённые IP игровых серверов, которые должны идти через VPN
-        foreach (string endpoint in _persistedGameVpnEndpoints)
+        // Восстанавливаем сохранённые IP игровых серверов из настроек (выживают смену локации)
+        string gameProcessName = (VpnGameProcess ?? "").Trim();
+        if (gameProcessName.Length > 0)
         {
-            string process = VpnGameProcess;
-            if (process.Length == 0) break;
-            string procName = Path.GetFileName(process);
+            string procName = Path.GetFileName(gameProcessName);
             if (!procName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) procName += ".exe";
-            var rule = new VpnGameEndpoint(procName.ToLowerInvariant(), endpoint);
-            if (!routing.GameEndpoints.Contains(rule)) routing.GameEndpoints.Add(rule);
+            procName = procName.ToLowerInvariant();
+            // Читаем напрямую из сохранённых настроек, чтобы не зависеть от памяти
+            string endpointsRaw = _gameVpnEndpointsText ?? "";
+            foreach (var endpoint in endpointsRaw.Split([',',';',' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                string cleanEndpoint = endpoint.Trim();
+                if (cleanEndpoint.Length == 0) continue;
+                // Поддержка CIDR и IP
+                int slash = cleanEndpoint.IndexOf('/');
+                string ipPart = slash >= 0 ? cleanEndpoint[..slash] : cleanEndpoint;
+                if (!System.Net.IPAddress.TryParse(ipPart, out _)) continue;
+                var rule = new VpnGameEndpoint(procName, cleanEndpoint);
+                if (!routing.GameEndpoints.Contains(rule)) routing.GameEndpoints.Add(rule);
+            }
         }
         if (_blockedPreset != BlockedListPreset.Off && routing.Mode != "full")
         {
