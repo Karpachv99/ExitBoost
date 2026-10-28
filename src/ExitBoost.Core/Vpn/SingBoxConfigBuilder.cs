@@ -19,8 +19,9 @@ public static class SingBoxConfigBuilder
     public const int ControlPort = 9097;
 
     /// <summary>
-    /// До этого размера список доменов дублируется в DNS-правилах (чтобы резолвить
-    /// выбранные сайты через VPN). Больше — весь DNS идёт через VPN без дублирования.
+    /// Верхний предел доменов, для которых создаются отдельные DNS-правила.
+    /// Большие списки остаются на локальном DNS: их размер не должен незаметно
+    /// переводить DNS всего компьютера на VPN.
     /// </summary>
     public const int MaxDomainsForDnsRules = 20_000;
 
@@ -62,10 +63,17 @@ public static class SingBoxConfigBuilder
             w.WriteEndObject();
             w.WriteEndArray();
 
-            // Список полного реестра (~1,7 млн) не дублируем в DNS-правилах:
-            // в этом случае весь DNS идёт через VPN.
-            bool remoteDnsForAll = full || routing.Domains.Count > MaxDomainsForDnsRules;
-            if (!remoteDnsForAll && routing.Domains.Count > 0)
+            // В split-режиме не отправляем весь DNS через VPN только потому, что
+            // список доменов большой. Иначе приложения, чей трафик идёт напрямую,
+            // могут получить адреса CDN, недоступные из их прямого маршрута.
+            // Для небольших списков выбранные домены резолвятся через VPN; для
+            // больших списков DNS остаётся локальным, а route-правила по доменам
+            // продолжают работать для соединений, где sing-box видит домен/SNI.
+            bool remoteDnsForAll = full;
+            bool useDomainDnsRules = !full
+                && routing.Domains.Count > 0
+                && routing.Domains.Count <= MaxDomainsForDnsRules;
+            if (useDomainDnsRules)
             {
                 w.WritePropertyName("rules");
                 w.WriteStartArray();
